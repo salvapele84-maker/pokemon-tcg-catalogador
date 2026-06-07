@@ -1,0 +1,3 @@
+# Renombra este archivo a "secrets.toml" para uso LOCAL (no se sube a GitHub).
+# En Streamlit Cloud, pega esta línea en Settings -> Secrets.
+pokemontcg_api_key = "pega-tu-key-aqui"
