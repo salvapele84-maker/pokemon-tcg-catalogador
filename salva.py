@@ -1,5 +1,9 @@
 import time
 import io
+import os
+import json
+import glob
+import threading
 import requests
 import pandas as pd
 import streamlit as st
@@ -61,6 +65,69 @@ COLOR_DEFAULT = {"bg": "#1E2530", "border": "#4A5568", "badge": "#2D3748", "text
 BASE_URL               = "https://api.pokemontcg.io/v2/cards"
 DELAY_ENTRE_CONSULTAS  = 1.2   # segundos
 
+# ── Caché global de consultas (segura entre hilos) ────────────────────────────
+# A diferencia de st.session_state (que NO es accesible de forma fiable desde los
+# hilos del ThreadPoolExecutor), un dict de módulo + Lock sí es thread-safe.
+# Persiste mientras el servidor esté encendido; se vacía al reiniciar la app.
+_QUERY_CACHE: dict = {}
+_QUERY_LOCK = threading.Lock()
+
+# ── Métricas de diagnóstico (para entender lentitud / rate limit en vivo) ─────
+_STATS = {"requests": 0, "cache_hits": 0, "rate_limited": 0, "errores": 0, "tiempo_red": 0.0}
+_STATS_LOCK = threading.Lock()
+
+# Config ajustable desde el sidebar (la lee _raw_query y el loop de proceso)
+_CFG = {"throttle": 0.2, "max_workers": 4}
+
+# ── Base de datos LOCAL (opcional) ────────────────────────────────────────────
+# Si el usuario descarga la base de pokemontcg.io (repo PokemonTCG/pokemon-tcg-data,
+# carpeta cards/en), la cargamos en memoria y buscamos ahí: instantáneo, completo
+# y sin depender de que la API esté en pie. Los precios de mercado NO vienen en
+# estos datos estáticos (solo en la API en vivo), así que en modo local pueden
+# faltar — pero la identificación de la carta es total.
+_DB_CARDS: list = []
+_DB_LOADED = False
+
+
+def cargar_base_local(carpeta: str) -> int:
+    """Carga todos los .json de una carpeta (cada uno es una lista de cartas)."""
+    global _DB_CARDS, _DB_LOADED
+    cards = []
+    for path in sorted(glob.glob(os.path.join(carpeta, "*.json"))):
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                cards.extend(data)
+            elif isinstance(data, dict) and "data" in data:
+                cards.extend(data["data"])
+        except Exception:
+            continue
+    _DB_CARDS = cards
+    _DB_LOADED = bool(cards)
+    return len(cards)
+
+
+def _buscar_local(nombre_en: str) -> list:
+    """Match parcial por nombre en la base local (imita el comportamiento de la API)."""
+    q = nombre_en.strip().lower()
+    if not q:
+        return []
+    return [c for c in _DB_CARDS if q in c.get("name", "").lower()]
+
+
+def _pool_nombre(nombre_en: str, api_key: str | None) -> list:
+    """Pool de cartas por nombre: de la base local si está cargada, si no de la API."""
+    if _DB_LOADED:
+        return _buscar_local(nombre_en)
+    return _raw_query(f'name:"{nombre_en}"', api_key, page_size=50)
+
+
+def _reset_stats():
+    with _STATS_LOCK:
+        for k in _STATS:
+            _STATS[k] = 0 if k != "tiempo_red" else 0.0
+
 # ── Estado/condición de la carta (clave para una herramienta de venta) ────────
 # Cada estado tiene una descripción y un multiplicador sobre el precio NM.
 # Estos multiplicadores son una convención de mercado aproximada y editables.
@@ -109,39 +176,47 @@ def _raw_query(query: str, api_key: str | None, page_size: int = 10) -> list:
     # Normalizar apóstrofes ANTES de todo (caché y petición real)
     query = _normalizar_apostrofe(query)
 
-    # ── Caché local en memoria (thread-safe con lock) ─────────────────────────
-    cache = st.session_state.setdefault("_query_cache", {})
-    lock  = st.session_state.setdefault("_query_lock", __import__("threading").Lock())
-    ckey  = (query, page_size)
-    with lock:
-        if ckey in cache:
-            return cache[ckey]
+    # ── Caché global thread-safe (NO usa session_state, que falla entre hilos) ─
+    ckey = (query, page_size)
+    with _QUERY_LOCK:
+        if ckey in _QUERY_CACHE:
+            with _STATS_LOCK:
+                _STATS["cache_hits"] += 1
+            return _QUERY_CACHE[ckey]
 
-    # ── Throttle mínimo: 0.5s sin key (30 req/min = 1 cada 2s, pero con
-    # paralelismo de hasta 4 workers el efectivo por hilo es ~0.5s).
-    # Con API key no se limita.
-    time.sleep(0.0 if api_key else 0.5)
+    # ── Throttle configurable desde el sidebar (s entre peticiones reales) ────
+    time.sleep(_CFG.get("throttle", 0.2) if api_key else max(_CFG.get("throttle", 0.2), 0.6))
 
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["X-Api-Key"] = api_key
     params = {"q": query, "pageSize": page_size, "orderBy": "-set.releaseDate"}
+    data = []
+    t0 = time.time()
     try:
         resp = requests.get(BASE_URL, headers=headers, params=params, timeout=10)
+        with _STATS_LOCK:
+            _STATS["requests"] += 1
         if resp.status_code == 429:
-            # Rate limit: esperar y reintentar UNA vez
-            time.sleep(4.0)
+            with _STATS_LOCK:
+                _STATS["rate_limited"] += 1
+            time.sleep(3.0)
             resp = requests.get(BASE_URL, headers=headers, params=params, timeout=10)
         resp.raise_for_status()
         data = resp.json().get("data", [])
     except Exception:
+        with _STATS_LOCK:
+            _STATS["errores"] += 1
         data = []
+    finally:
+        with _STATS_LOCK:
+            _STATS["tiempo_red"] += time.time() - t0
 
     # Solo cacheamos resultados válidos: así un fallo de red puntual no queda
     # "pegado" como si la carta no existiera.
     if data:
-        with lock:
-            cache[ckey] = data
+        with _QUERY_LOCK:
+            _QUERY_CACHE[ckey] = data
     return data
 
 def buscar_carta(nombre_en, tipo, regulation_mark, numero, api_key) -> tuple[list, str]:
@@ -156,42 +231,57 @@ def buscar_carta(nombre_en, tipo, regulation_mark, numero, api_key) -> tuple[lis
     tiene_numero = bool(numero and numero not in ("", "nan", "-"))
     tiene_mark   = bool(regulation_mark and regulation_mark.lower() not in ("", "nan"))
     tipo_api     = TIPOS_API.get(tipo.strip().lower(), "") if tipo.strip() else ""
+    nn = nombre_en.strip().lower()
 
-    # Nivel 1a — número exacto + bloque (el más preciso)
-    if tiene_numero and tiene_mark:
-        r = _raw_query(
-            f'name:"{nombre_en}" number:"{numero}" regulationMark:{regulation_mark.upper()}',
-            api_key
-        )
-        if r:
-            return r, "número exacto"
+    def _exactos(lst):
+        return [c for c in lst if c.get("name", "").strip().lower() == nn]
 
-    # Nivel 1b — número exacto sin bloque
-    if tiene_numero:
-        r = _raw_query(f'name:"{nombre_en}" number:"{numero}"', api_key)
-        if r:
-            return r, "número exacto"
-
-    # Nivel 2 — nombre + bloque (+ tipo)
-    if tiene_mark:
-        partes = [f'name:"{nombre_en}"', f"regulationMark:{regulation_mark.upper()}"]
+    # ── VÍA RÁPIDA: pool de cartas por nombre (base local si está, si no API) ─
+    amplia = _pool_nombre(nombre_en, api_key)
+    ex = _exactos(amplia)
+    if ex:  # encontramos el nombre EXACTO
+        if tiene_numero:
+            por_num = [c for c in ex if str(c.get("number", "")).lower() == numero.lower()]
+            if por_num:
+                return por_num, "número exacto"
+        if tiene_mark:
+            pm = [c for c in ex if str(c.get("regulationMark", "")).upper() == regulation_mark.upper()]
+            if tipo_api:
+                pm = [c for c in pm if c.get("supertype", "") == tipo_api] or pm
+            if pm:
+                return pm, "nombre + bloque"
         if tipo_api:
-            partes.append(f"supertype:{tipo_api}")
-        r = _raw_query(" ".join(partes), api_key)
-        if r:
-            return r, "nombre + bloque"
+            pt = [c for c in ex if c.get("supertype", "") == tipo_api]
+            if pt:
+                return pt, "nombre + tipo"
+        return ex, "solo nombre"
 
-    # Nivel 3 — nombre + tipo
-    if tipo_api:
-        r = _raw_query(f'name:"{nombre_en}" supertype:{tipo_api}', api_key)
-        if r:
-            return r, "nombre + tipo"
+    # ── FALLBACK DIRIGIDO (solo en modo API; en modo local el pool ya es total)
+    if not _DB_LOADED:
+        if tiene_numero:
+            r = _raw_query(f'name:"{nombre_en}" number:"{numero}"', api_key)
+            rex = _exactos(r)
+            if rex:
+                return rex, "número exacto"
+            if r:
+                return r, "número exacto"
+        if tiene_mark:
+            partes = [f'name:"{nombre_en}"', f"regulationMark:{regulation_mark.upper()}"]
+            if tipo_api:
+                partes.append(f"supertype:{tipo_api}")
+            r = _raw_query(" ".join(partes), api_key)
+            rex = _exactos(r) or r
+            if rex:
+                return rex, "nombre + bloque"
+        if tipo_api:
+            r = _raw_query(f'name:"{nombre_en}" supertype:{tipo_api}', api_key)
+            rex = _exactos(r) or r
+            if rex:
+                return rex, "nombre + tipo"
 
-    # Nivel 4 — solo nombre
-    r = _raw_query(f'name:"{nombre_en}"', api_key)
-    if r:
-        return r, "solo nombre"
-
+    # Último recurso: lo que haya devuelto el pool por nombre
+    if amplia:
+        return amplia, "solo nombre"
     return [], "sin resultados"
 
 
@@ -1331,15 +1421,53 @@ def main():
             display:inline-block;background:#2B6CB0;color:white;
             font-size:0.75rem;font-weight:600;padding:3px 12px;
             border-radius:20px;margin-bottom:0.75rem;letter-spacing:0.05em;
-        ">FASE 6</span>
+        ">BETA · PROTOTIPO</span>
         <h1 style="color:white;margin:0;font-size:2rem;">
             ⚡ Catalogador Inteligente — Pokémon TCG
         </h1>
         <p style="color:#A0AEC0;margin:0.5rem 0 0;font-size:1rem;">
-            Listado para venta · Confianza del match · Estado de carta · Precio de referencia
+            Sube la lista de tus cartas y te las dejo identificadas, valorizadas y listas para vender.
         </p>
     </div>
     """, unsafe_allow_html=True)
+
+    # ── Pantalla de bienvenida (solo si aún no hay resultados) ────────────────
+    if "df_result" not in st.session_state:
+        st.markdown("""
+        <div style="background:#161B22;border:1px solid #2D3748;border-radius:12px;
+                    padding:1.5rem 1.75rem;margin-bottom:1.25rem;">
+            <p style="color:#FFFFFF;font-size:1.05rem;margin:0 0 1rem;font-weight:600;">
+                🎯 ¿Qué hace esta herramienta?
+            </p>
+            <p style="color:#CBD5E0;font-size:0.95rem;margin:0 0 1.25rem;line-height:1.6;">
+                Catalogar cartas Pokémon a mano es lento: hay que buscar cada versión, su set, su
+                rareza y su precio una por una. Esta app lo hace por ti en lote: subes una lista
+                simple y te devuelve cada carta identificada con su arte exacto, su precio de
+                referencia y lista para publicar.
+            </p>
+            <div style="display:flex;gap:1rem;flex-wrap:wrap;">
+                <div style="flex:1;min-width:180px;background:#1E2530;border-radius:10px;padding:1rem;">
+                    <div style="font-size:1.5rem;">1️⃣</div>
+                    <p style="color:#90CDF4;font-weight:700;margin:0.4rem 0 0.2rem;">Sube tu lista</p>
+                    <p style="color:#A0AEC0;font-size:0.85rem;margin:0;">Un Excel con nombre, número y estado. O usa los datos de ejemplo.</p>
+                </div>
+                <div style="flex:1;min-width:180px;background:#1E2530;border-radius:10px;padding:1rem;">
+                    <div style="font-size:1.5rem;">2️⃣</div>
+                    <p style="color:#9AE6B4;font-weight:700;margin:0.4rem 0 0.2rem;">La app identifica</p>
+                    <p style="color:#A0AEC0;font-size:0.85rem;margin:0;">Busca cada carta en la base oficial y encuentra el arte exacto y su precio.</p>
+                </div>
+                <div style="flex:1;min-width:180px;background:#1E2530;border-radius:10px;padding:1rem;">
+                    <div style="font-size:1.5rem;">3️⃣</div>
+                    <p style="color:#FBD38D;font-weight:700;margin:0.4rem 0 0.2rem;">Revisa y vende</p>
+                    <p style="color:#A0AEC0;font-size:0.85rem;margin:0;">Ajustas precios, revisas dudosas y descargas tu lista lista para publicar.</p>
+                </div>
+            </div>
+            <p style="color:#F6E05E;font-size:0.9rem;margin:1.1rem 0 0;">
+                👇 ¿Primera vez? Más abajo deja marcado <b>“Usar datos de prueba”</b> y pulsa
+                <b>⚡ Iniciar búsqueda</b> para ver una demo al instante.
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
 
     # ── Sidebar ───────────────────────────────────────────────────────────────
     with st.sidebar:
@@ -1370,9 +1498,9 @@ def main():
 
         if api_key:
             origen = " (desde secrets.toml)" if api_key == _api_key_de_secrets() else ""
-            st.success(f"🔑 API Key activa — máxima velocidad (8 workers){origen}")
+            st.success(f"🔑 API Key activa — velocidad óptima (4 workers){origen}")
         else:
-            st.info("💡 Sin API key: 4 workers con throttle. Obtén una gratis en pokemontcg.io")
+            st.info("💡 Sin API key: 3 workers con throttle. Obtén una gratis en pokemontcg.io")
         clp_rate = st.number_input(
             "Tipo de cambio USD → CLP", min_value=0, value=950, step=10,
             help="Para sugerir el precio en pesos a partir del precio de mercado. "
@@ -1382,6 +1510,35 @@ def main():
             "Comisión plataforma (%)", min_value=0.0, max_value=50.0, value=0.0, step=0.5,
             help="Se descuenta del precio para calcular tu neto en la pestaña «Precios y venta».",
         )
+        st.markdown("---")
+        st.subheader("⚡ Velocidad")
+        cfg_workers = st.slider(
+            "Workers en paralelo", min_value=1, max_value=8, value=4,
+            help="Más workers = más rápido, pero si la API te limita (429) súbelo poco.",
+        )
+        cfg_throttle = st.slider(
+            "Espera entre peticiones (s)", min_value=0.0, max_value=2.0, value=0.2, step=0.1,
+            help="Si ves muchos 429 en el diagnóstico, sube esto a 0.5–1.0.",
+        )
+        _CFG["max_workers"] = cfg_workers
+        _CFG["throttle"] = cfg_throttle
+
+        st.markdown("---")
+        st.subheader("📂 Base de datos local")
+        # Autodetección: si existe una de estas carpetas, la cargamos una vez.
+        if not _DB_LOADED:
+            for cp in ("card_data", os.path.join("pokemon-tcg-data", "cards", "en"),
+                       os.path.join("pokemon-tcg-data-master", "cards", "en")):
+                if os.path.isdir(cp) and cargar_base_local(cp):
+                    break
+        if _DB_LOADED:
+            st.success(f"✅ Base local activa — {len(_DB_CARDS):,} cartas. "
+                       "Búsqueda instantánea, sin depender de la API.")
+            st.caption("Nota: los precios de mercado solo vienen de la API en vivo; "
+                       "en modo local pueden no aparecer.")
+        else:
+            st.info("Usando la API en vivo. Para que NO dependa de la API (instantáneo y "
+                    "estable aunque la API esté caída), descarga la base local — ver README.")
         st.markdown("---")
         st.subheader("📋 Columnas del archivo")
         st.markdown("""
@@ -1537,11 +1694,10 @@ pero la API trajo otra versión → **revisar**.
         status_box = st.empty()
         resultados = [None] * total
 
-        # ── Paralelismo ───────────────────────────────────────────────────────
-        # Sin API key: 4 workers mantiene ~2 req/s totales (0.5s sleep × 4),
-        # bien por debajo del límite de 30 req/min de la API gratuita.
-        # Con API key subimos a 8 workers (límite es 20.000/día, no hay problema).
-        max_workers = 8 if (api_key and api_key.strip()) else 4
+        # ── Paralelismo (configurable desde el sidebar) ───────────────────────
+        max_workers = _CFG.get("max_workers", 4)
+        _reset_stats()
+        t_inicio = time.time()
         completadas = [0]  # lista para mutación dentro del closure
 
         filas = []
@@ -1580,6 +1736,29 @@ pero la API trajo otra versión → **revisar**.
                 progress.progress(completadas[0] / total)
 
         status_box.success(f"✅ Completado — {total} cartas procesadas.")
+
+        # ── Panel de diagnóstico ──────────────────────────────────────────────
+        dur = time.time() - t_inicio
+        with _STATS_LOCK:
+            s = dict(_STATS)
+        reqs = s["requests"]
+        prom = (s["tiempo_red"] / reqs) if reqs else 0
+        with st.expander("🔍 Diagnóstico de velocidad (ver por qué tardó lo que tardó)", expanded=True):
+            d1, d2, d3, d4, d5 = st.columns(5)
+            d1.metric("⏱️ Tiempo total", f"{dur:.0f} s")
+            d2.metric("🌐 Peticiones reales", reqs)
+            d3.metric("⚡ Aciertos de caché", s["cache_hits"])
+            d4.metric("🚫 Rate limit (429)", s["rate_limited"])
+            d5.metric("⏳ Prom. por petición", f"{prom:.2f} s")
+            if s["rate_limited"] > 0:
+                st.warning(f"La API te limitó {s['rate_limited']} vez(es) (429). "
+                           "Sube la «Espera entre peticiones» a 0.5–1.0 y/o baja los workers en el sidebar.")
+            elif prom > 1.5:
+                st.warning(f"Cada petición tardó en promedio {prom:.1f}s — la API está lenta ahora mismo "
+                           "(no es tu PC). Reintenta más tarde o baja los workers.")
+            else:
+                st.info("Sin rate limit y respuesta rápida. Si reprocesas, la caché lo hará casi instantáneo.")
+
         df_final = pd.DataFrame(resultados)
         # Separamos las variantes candidatas a session_state (no van en la tabla
         # ni en el Excel) para poder ofrecer la corrección manual de versión.
@@ -1595,6 +1774,16 @@ pero la API trajo otra versión → **revisar**.
     # Mostrar dashboard si hay resultados en session_state
     if "df_result" in st.session_state:
         render_dashboard(st.session_state["df_result"], clp_rate=clp_rate, comision=comision)
+
+    # ── Pie de página / feedback ──────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("""
+    <div style="text-align:center;color:#718096;font-size:0.85rem;padding:0.5rem 0 1.5rem;">
+        🧪 Versión beta · Prototipo de un proyecto en desarrollo.<br>
+        ¿Te sirvió o tienes ideas? Tu feedback ayuda a mejorarlo —
+        <a href="mailto:tucorreo@ejemplo.com" style="color:#63B3ED;">escríbeme aquí</a>.
+    </div>
+    """, unsafe_allow_html=True)
 
 
 if __name__ == "__main__":

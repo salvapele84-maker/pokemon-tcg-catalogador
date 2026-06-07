@@ -55,3 +55,28 @@ a `.streamlit/secrets.toml` y pon tu key.
 | cantidad | No | 4 |
 | es_de_liga | No | Sí / No |
 | set_forzado | No | Ascended Heroes |
+
+---
+
+## 🚀 OPCIONAL pero MUY recomendado: base de datos local (sin depender de la API)
+
+La API en vivo de pokemontcg.io a veces se cae o va lenta. Para que tu app
+funcione **siempre y al instante**, descarga su base de datos una vez:
+
+1. Entra a https://github.com/PokemonTCG/pokemon-tcg-data
+2. Botón verde **"Code" → "Download ZIP"**.
+3. Descomprime. Dentro hay una carpeta `cards/en/` con muchos archivos .json.
+4. Copia esa carpeta `en` (la de `cards/en`) a tu proyecto y renómbrala a
+   **`card_data`** (debe quedar `card_data/` junto a `salva.py`, con los .json adentro).
+5. La app la detecta sola al arrancar: en el sidebar verás
+   "✅ Base local activa — N cartas".
+
+Con la base local:
+- ✅ Búsqueda **instantánea** (no espera a la API).
+- ✅ Funciona aunque la API esté caída.
+- ✅ Sin límite de peticiones (no más errores 429).
+- ⚠️ Los **precios de mercado** no vienen en estos datos estáticos; para precios
+  necesitas la API en vivo. (La identificación de la carta sí es completa.)
+
+Para que funcione también ONLINE en Streamlit Cloud, sube la carpeta `card_data`
+a tu repositorio de GitHub junto con el resto (son unos pocos MB).
