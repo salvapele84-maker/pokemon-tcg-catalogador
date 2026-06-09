@@ -539,7 +539,6 @@ def enriquecer_precios_en_lote(
             status_box.info("✅ Todas las cartas ya tienen precio (o no hay ID para consultar).")
         return df
 
-    completadas = [0]
     max_workers = _CFG.get("max_workers", 4)
 
     def _enriquecer_fila(idx):
@@ -554,24 +553,35 @@ def enriquecer_precios_en_lote(
         precio_clp = int(round((precio_aj * clp_rate) / 100.0)) * 100 if (precio_aj and clp_rate) else None
         return idx, precio_usd, precio_aj, precio_clp, variante or "-", fecha
 
+    # ── Correr TODOS los hilos y esperar que terminen ANTES de tocar la UI ─────
+    # Cualquier llamada a status_box/progress_bar desde un hilo puede disparar
+    # un rerun de Streamlit y cortar la ejecución a la mitad. Por eso recopilamos
+    # todos los resultados primero y actualizamos la UI solo después, en el
+    # hilo principal, una sola vez al finalizar.
+    resultados_precio = {}
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {executor.submit(_enriquecer_fila, idx): idx for idx in filas_a_enriquecer}
         for future in as_completed(futures):
             idx, p_usd, p_aj, p_clp, variante, fecha = future.result()
-            if p_usd is not None:
-                df.at[idx, "Precio USD Mercado"]  = p_usd
-                df.at[idx, "Precio USD Ajustado"] = p_aj
-                df.at[idx, "Precio CLP Sugerido"] = p_clp
-                df.at[idx, "Variante Precio"]     = variante
-                df.at[idx, "Fecha Precio"]        = fecha
-            completadas[0] += 1
-            nombre = df.at[idx, "Nombre Original"] if "Nombre Original" in df.columns else str(idx)
-            if status_box:
-                status_box.markdown(
-                    f"💰 **{completadas[0]}/{total}** precios obtenidos — última: **{nombre}**"
-                )
-            if progress_bar:
-                progress_bar.progress(completadas[0] / total)
+            resultados_precio[idx] = (p_usd, p_aj, p_clp, variante, fecha)
+        # El executor.shutdown (implícito al salir del with) garantiza que TODOS
+        # los hilos terminaron antes de continuar — sin interferir con Streamlit.
+
+    # Aplicar resultados al DataFrame (hilo principal, sin widgets de por medio)
+    for idx, (p_usd, p_aj, p_clp, variante, fecha) in resultados_precio.items():
+        if p_usd is not None:
+            df.at[idx, "Precio USD Mercado"]  = p_usd
+            df.at[idx, "Precio USD Ajustado"] = p_aj
+            df.at[idx, "Precio CLP Sugerido"] = p_clp
+            df.at[idx, "Variante Precio"]     = variante
+            df.at[idx, "Fecha Precio"]        = fecha
+
+    # Una sola actualización de UI al finalizar (segura, hilo principal)
+    if progress_bar:
+        progress_bar.progress(1.0)
+    if status_box:
+        n_ok = sum(1 for (p, *_) in resultados_precio.values() if p is not None)
+        status_box.markdown(f"💰 **{n_ok}/{total}** precios obtenidos correctamente.")
 
     return df
 
