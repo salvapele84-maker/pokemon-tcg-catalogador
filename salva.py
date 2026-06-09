@@ -1,8 +1,5 @@
 import time
 import io
-import os
-import json
-import glob
 import threading
 import requests
 import pandas as pd
@@ -78,49 +75,6 @@ _STATS_LOCK = threading.Lock()
 
 # Config ajustable desde el sidebar (la lee _raw_query y el loop de proceso)
 _CFG = {"throttle": 0.2, "max_workers": 4}
-
-# ── Base de datos LOCAL (opcional) ────────────────────────────────────────────
-# Si el usuario descarga la base de pokemontcg.io (repo PokemonTCG/pokemon-tcg-data,
-# carpeta cards/en), la cargamos en memoria y buscamos ahí: instantáneo, completo
-# y sin depender de que la API esté en pie. Los precios de mercado NO vienen en
-# estos datos estáticos (solo en la API en vivo), así que en modo local pueden
-# faltar — pero la identificación de la carta es total.
-_DB_CARDS: list = []
-_DB_LOADED = False
-
-
-def cargar_base_local(carpeta: str) -> int:
-    """Carga todos los .json de una carpeta (cada uno es una lista de cartas)."""
-    global _DB_CARDS, _DB_LOADED
-    cards = []
-    for path in sorted(glob.glob(os.path.join(carpeta, "*.json"))):
-        try:
-            with open(path, encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, list):
-                cards.extend(data)
-            elif isinstance(data, dict) and "data" in data:
-                cards.extend(data["data"])
-        except Exception:
-            continue
-    _DB_CARDS = cards
-    _DB_LOADED = bool(cards)
-    return len(cards)
-
-
-def _buscar_local(nombre_en: str) -> list:
-    """Match parcial por nombre en la base local (imita el comportamiento de la API)."""
-    q = nombre_en.strip().lower()
-    if not q:
-        return []
-    return [c for c in _DB_CARDS if q in c.get("name", "").lower()]
-
-
-def _pool_nombre(nombre_en: str, api_key: str | None) -> list:
-    """Pool de cartas por nombre: de la base local si está cargada, si no de la API."""
-    if _DB_LOADED:
-        return _buscar_local(nombre_en)
-    return _raw_query(f'name:"{nombre_en}"', api_key, page_size=50)
 
 
 def _reset_stats():
@@ -236,10 +190,11 @@ def buscar_carta(nombre_en, tipo, regulation_mark, numero, api_key) -> tuple[lis
     def _exactos(lst):
         return [c for c in lst if c.get("name", "").strip().lower() == nn]
 
-    # ── VÍA RÁPIDA: pool de cartas por nombre (base local si está, si no API) ─
-    amplia = _pool_nombre(nombre_en, api_key)
+    # ── VÍA RÁPIDA: una sola consulta amplia por nombre (filtrado en Python) ──
+    # Resuelve el 99% de las cartas con 1 sola petición → pocos 429, muy rápido.
+    amplia = _raw_query(f'name:"{nombre_en}"', api_key, page_size=50)
     ex = _exactos(amplia)
-    if ex:  # encontramos el nombre EXACTO
+    if ex:  # encontramos el nombre EXACTO en la consulta amplia
         if tiene_numero:
             por_num = [c for c in ex if str(c.get("number", "")).lower() == numero.lower()]
             if por_num:
@@ -256,30 +211,32 @@ def buscar_carta(nombre_en, tipo, regulation_mark, numero, api_key) -> tuple[lis
                 return pt, "nombre + tipo"
         return ex, "solo nombre"
 
-    # ── FALLBACK DIRIGIDO (solo en modo API; en modo local el pool ya es total)
-    if not _DB_LOADED:
-        if tiene_numero:
-            r = _raw_query(f'name:"{nombre_en}" number:"{numero}"', api_key)
-            rex = _exactos(r)
-            if rex:
-                return rex, "número exacto"
-            if r:
-                return r, "número exacto"
-        if tiene_mark:
-            partes = [f'name:"{nombre_en}"', f"regulationMark:{regulation_mark.upper()}"]
-            if tipo_api:
-                partes.append(f"supertype:{tipo_api}")
-            r = _raw_query(" ".join(partes), api_key)
-            rex = _exactos(r) or r
-            if rex:
-                return rex, "nombre + bloque"
+    # ── FALLBACK DIRIGIDO ─────────────────────────────────────────────────────
+    # El nombre exacto NO estaba en la consulta amplia (p. ej. "Iono" sepultada
+    # entre "Iono's …", o un nombre con muchos reprints), o la consulta vino
+    # vacía. Hacemos consultas precisas que filtran en el servidor.
+    if tiene_numero:
+        r = _raw_query(f'name:"{nombre_en}" number:"{numero}"', api_key)
+        rex = _exactos(r)
+        if rex:
+            return rex, "número exacto"
+        if r:
+            return r, "número exacto"
+    if tiene_mark:
+        partes = [f'name:"{nombre_en}"', f"regulationMark:{regulation_mark.upper()}"]
         if tipo_api:
-            r = _raw_query(f'name:"{nombre_en}" supertype:{tipo_api}', api_key)
-            rex = _exactos(r) or r
-            if rex:
-                return rex, "nombre + tipo"
+            partes.append(f"supertype:{tipo_api}")
+        r = _raw_query(" ".join(partes), api_key)
+        rex = _exactos(r) or r
+        if rex:
+            return rex, "nombre + bloque"
+    if tipo_api:
+        r = _raw_query(f'name:"{nombre_en}" supertype:{tipo_api}', api_key)
+        rex = _exactos(r) or r
+        if rex:
+            return rex, "nombre + tipo"
 
-    # Último recurso: lo que haya devuelto el pool por nombre
+    # Último recurso: lo que haya devuelto la consulta amplia
     if amplia:
         return amplia, "solo nombre"
     return [], "sin resultados"
@@ -1522,23 +1479,6 @@ def main():
         )
         _CFG["max_workers"] = cfg_workers
         _CFG["throttle"] = cfg_throttle
-
-        st.markdown("---")
-        st.subheader("📂 Base de datos local")
-        # Autodetección: si existe una de estas carpetas, la cargamos una vez.
-        if not _DB_LOADED:
-            for cp in ("card_data", os.path.join("pokemon-tcg-data", "cards", "en"),
-                       os.path.join("pokemon-tcg-data-master", "cards", "en")):
-                if os.path.isdir(cp) and cargar_base_local(cp):
-                    break
-        if _DB_LOADED:
-            st.success(f"✅ Base local activa — {len(_DB_CARDS):,} cartas. "
-                       "Búsqueda instantánea, sin depender de la API.")
-            st.caption("Nota: los precios de mercado solo vienen de la API en vivo; "
-                       "en modo local pueden no aparecer.")
-        else:
-            st.info("Usando la API en vivo. Para que NO dependa de la API (instantáneo y "
-                    "estable aunque la API esté caída), descarga la base local — ver README.")
         st.markdown("---")
         st.subheader("📋 Columnas del archivo")
         st.markdown("""
@@ -1645,9 +1585,62 @@ pero la API trajo otra versión → **revisar**.
             </div>
             """, unsafe_allow_html=True)
 
+    # ── Carga manual de una carta (sin Excel) ─────────────────────────────────
+    st.markdown("---")
+    st.markdown("""
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:2px;">
+        <span style="font-size:1.15rem;font-weight:700;color:#FFFFFF;
+              font-family:inherit;">✍️ ¿Solo unas pocas cartas?</span>
+        <span style="background:#234E52;color:#9DECF9;font-size:0.68rem;font-weight:700;
+              padding:2px 9px;border-radius:999px;letter-spacing:.04em;">SIN EXCEL</span>
+    </div>
+    <p style="color:#A0AEC0;font-size:0.9rem;margin:0 0 4px;">
+        Agrégalas una por una acá abajo. Se procesan al instante y aparecen en el dashboard.
+    </p>
+    """, unsafe_allow_html=True)
+
+    with st.expander("➕ Agregar una carta a mano", expanded=False):
+        with st.form("form_carta_manual", clear_on_submit=True):
+            mc1, mc2 = st.columns([2, 1])
+            m_nombre = mc1.text_input("Nombre de la carta *", placeholder="Ej: Charizard ex")
+            m_tipo = mc2.selectbox("Tipo", ["Pokémon", "Trainer", "Energy"])
+            mc3, mc4, mc5 = st.columns(3)
+            m_numero = mc3.text_input("N° de carta", placeholder="Ej: 234")
+            m_bloque = mc4.text_input("Bloque", placeholder="Ej: G / H")
+            m_estado = mc5.selectbox("Estado", ["NM", "LP", "MP", "HP", "DMG"])
+            mc6, mc7 = st.columns([1, 2])
+            m_cantidad = mc6.number_input("Cantidad", min_value=1, max_value=99, value=1, step=1)
+            m_liga = mc7.checkbox("Es versión de Liga / Promo")
+            m_enviar = st.form_submit_button("➕ Agregar y procesar carta", type="primary",
+                                             use_container_width=True)
+
+        if m_enviar:
+            if not m_nombre.strip():
+                st.error("⛔ Escribe el nombre de la carta.")
+            else:
+                fila_manual = {
+                    "nombre": m_nombre, "tipo": m_tipo, "regulation_mark": m_bloque,
+                    "numero": str(m_numero).strip(), "estado": m_estado,
+                    "cantidad": m_cantidad, "es_de_liga": "Sí" if m_liga else "No",
+                    "set_forzado": "",
+                }
+                with st.spinner(f"Buscando «{m_nombre}»…"):
+                    res = procesar_carta(fila_manual, api_key or None, clp_rate)
+                cand = res.pop("_candidatos", []) if isinstance(res, dict) else []
+                df_new = pd.DataFrame([res])
+                if "df_result" in st.session_state:
+                    df_comb = pd.concat([st.session_state["df_result"], df_new], ignore_index=True)
+                else:
+                    df_comb = df_new
+                st.session_state["df_result"] = df_comb
+                cands = st.session_state.setdefault("candidatos", {})
+                cands[len(df_comb) - 1] = cand
+                st.success(f"✅ «{m_nombre}» agregada al dashboard.")
+                st.rerun()
+
     # ── Procesamiento ─────────────────────────────────────────────────────────
     st.markdown("---")
-    st.subheader("3. Procesar y enriquecer")
+    st.subheader("3. Procesar y enriquecer (desde archivo)")
 
     usar_demo = st.checkbox("Usar datos de prueba internos", value=(archivo is None))
     if usar_demo:
