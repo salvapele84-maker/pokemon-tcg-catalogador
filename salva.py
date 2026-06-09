@@ -515,12 +515,23 @@ def enriquecer_precios_en_lote(
             status_box.warning("No hay columna 'Card ID' — no se puede enriquecer.")
         return df
 
-    filas_a_enriquecer = df[
+    # Mask: sin precio (None o NaN)
+    def _es_sin_precio(v):
+        if v is None:
+            return True
+        try:
+            return pd.isna(v)
+        except Exception:
+            return False
+
+    mask_sin_precio = df["Precio USD Mercado"].apply(_es_sin_precio)
+    mask_con_id = (
         df["Card ID"].notna() &
-        (df["Card ID"] != "-") &
-        (df["Card ID"] != "") &
-        df["Precio USD Mercado"].isna()
-    ].index.tolist()
+        (df["Card ID"].astype(str).str.strip() != "-") &
+        (df["Card ID"].astype(str).str.strip() != "")
+    )
+
+    filas_a_enriquecer = df[mask_sin_precio & mask_con_id].index.tolist()
 
     total = len(filas_a_enriquecer)
     if total == 0:
@@ -2017,33 +2028,44 @@ pero la API trajo otra versión → **revisar**.
         st.session_state["df_result"] = df_final
 
     # ── Segundo paso: enriquecer precios vía API ───────────────────────────────
-    if "df_result" in st.session_state and _DB_LOADED:
+    # Siempre visible si hay resultados con cartas sin precio, independiente
+    # de si la base local está cargada o no.
+    if "df_result" in st.session_state:
         df_cur = st.session_state["df_result"]
-        sin_precio = (
-            "Card ID" in df_cur.columns and
-            df_cur["Card ID"].notna().any() and
-            df_cur["Precio USD Mercado"].isna().any()
-        )
-        if sin_precio:
-            n_sin = int(df_cur["Precio USD Mercado"].isna().sum())
+        # Verificar columnas necesarias
+        tiene_card_id   = "Card ID" in df_cur.columns
+        tiene_col_precio = "Precio USD Mercado" in df_cur.columns
+        # Hay al menos una carta sin precio Y con Card ID válido para consultarla
+        if tiene_card_id and tiene_col_precio:
+            mask_sin_precio = df_cur["Precio USD Mercado"].isna()
+            mask_con_id = (
+                df_cur["Card ID"].notna() &
+                (df_cur["Card ID"] != "-") &
+                (df_cur["Card ID"] != "")
+            )
+            n_sin = int((mask_sin_precio & mask_con_id).sum())
+        else:
+            n_sin = 0
+
+        if n_sin > 0:
             st.markdown("---")
             st.markdown(f"""
             <div style="background:#1A2A1A;border:1px solid #48BB78;border-radius:12px;
                         padding:1rem 1.25rem;margin-bottom:0.5rem;">
                 <p style="color:#9AE6B4;font-weight:700;margin:0 0 4px;font-size:1.05rem;">
-                    💰 Paso 2 opcional: obtener precios de mercado
+                    💰 Paso 2 — obtener precios de mercado
                 </p>
                 <p style="color:#A0AEC0;font-size:0.9rem;margin:0;">
-                    Las <b style="color:#F6AD55;">{n_sin} cartas</b> identificadas aún no tienen precio
-                    (la base local no los incluye). Pulsa el botón para consultarlos a la API ahora —
-                    cada carta ya está identificada por su ID, así que cada consulta es una sola
-                    petición directa, sin búsqueda. Tarda lo que la API tarde, no la identificación.
+                    <b style="color:#F6AD55;">{n_sin} carta(s)</b> identificadas aún no tienen precio.
+                    Pulsa el botón para consultarlos: cada carta ya tiene su ID exacto,
+                    así que es una petición directa por carta, sin búsqueda de texto.
+                    Tarda lo que la API tarde (segundos, no minutos).
                 </p>
             </div>
             """, unsafe_allow_html=True)
             if st.button(
-                f"💰 Obtener precios ({n_sin} cartas)",
-                type="secondary",
+                f"💰 Obtener precios ({n_sin} carta(s))",
+                type="primary",
                 use_container_width=True,
                 key="btn_precios",
             ):
@@ -2061,9 +2083,11 @@ pero la API trajo otra versión → **revisar**.
                 dur2 = time.time() - t2
                 with _STATS_LOCK:
                     s2 = dict(_STATS)
+                n_con_precio = int(df_enriq["Precio USD Mercado"].notna().sum())
                 status2.success(
                     f"✅ Precios obtenidos en {dur2:.0f}s — "
-                    f"{s2['requests']} peticiones, {s2['rate_limited']} rate-limits."
+                    f"{s2['requests']} peticiones | {n_con_precio} cartas con precio | "
+                    f"{s2['rate_limited']} rate-limits."
                 )
                 st.session_state["df_result"] = df_enriq
                 st.rerun()
