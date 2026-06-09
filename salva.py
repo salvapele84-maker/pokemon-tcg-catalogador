@@ -446,6 +446,7 @@ def _resultado_desde_carta(base: dict, carta: dict, numero: str, tiene_numero: b
 
     return {
         **base,
+        "Card ID":       carta.get("id", "-"),
         "Set":           carta.get("set", {}).get("name", "-"),
         "Número Carta":  numero_carta,
         "Número Coincide": "Sí" if numero_coincide else ("No" if tiene_numero else "-"),
@@ -459,6 +460,109 @@ def _resultado_desde_carta(base: dict, carta: dict, numero: str, tiene_numero: b
         "Fecha Precio":        fecha_precio,
         "URL Imagen":    carta.get("images", {}).get("small", ""),
     }
+
+
+def fetch_precio_por_id(card_id: str, api_key: str | None) -> dict | None:
+    """Consulta un solo card-id en la API y devuelve el objeto carta con precios.
+
+    Esta es la consulta más eficiente posible: un GET directo a /v2/cards/{id},
+    sin búsqueda de texto. Solo se usa en el segundo paso (enriquecimiento de precios)
+    cuando la base local ya identificó la carta pero no tenía precios embebidos.
+    """
+    if not card_id or card_id == "-":
+        return None
+    url = f"{BASE_URL}/{card_id}"
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["X-Api-Key"] = api_key
+    time.sleep(_CFG.get("throttle", 0.2))
+    try:
+        resp = requests.get(url, headers=headers, timeout=10)
+        with _STATS_LOCK:
+            _STATS["requests"] += 1
+        if resp.status_code == 429:
+            with _STATS_LOCK:
+                _STATS["rate_limited"] += 1
+            time.sleep(3.0)
+            resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            return resp.json().get("data")
+    except Exception:
+        with _STATS_LOCK:
+            _STATS["errores"] += 1
+    return None
+
+
+def enriquecer_precios_en_lote(
+    df: "pd.DataFrame",
+    api_key: str | None,
+    clp_rate: float,
+    progress_bar=None,
+    status_box=None,
+) -> "pd.DataFrame":
+    """Segundo paso: busca precios vía API para cada carta que ya fue identificada.
+
+    Solo consulta las cartas que:
+      - Tienen un Card ID (la base local lo incluye en cada objeto)
+      - No tienen precio aún (Precio USD Mercado es None/NaN)
+
+    Devuelve el mismo DataFrame con las columnas de precio rellenas.
+    """
+    df = df.copy()
+    # Necesitamos la columna Card ID (la agregamos en _resultado_desde_carta)
+    if "Card ID" not in df.columns:
+        if status_box:
+            status_box.warning("No hay columna 'Card ID' — no se puede enriquecer.")
+        return df
+
+    filas_a_enriquecer = df[
+        df["Card ID"].notna() &
+        (df["Card ID"] != "-") &
+        (df["Card ID"] != "") &
+        df["Precio USD Mercado"].isna()
+    ].index.tolist()
+
+    total = len(filas_a_enriquecer)
+    if total == 0:
+        if status_box:
+            status_box.info("✅ Todas las cartas ya tienen precio (o no hay ID para consultar).")
+        return df
+
+    completadas = [0]
+    max_workers = _CFG.get("max_workers", 4)
+
+    def _enriquecer_fila(idx):
+        card_id  = df.at[idx, "Card ID"]
+        estado   = str(df.at[idx, "Estado"]) if "Estado" in df.columns else "NM"
+        _, mult  = ESTADOS.get(estado, ("Near Mint", 1.0))
+        carta    = fetch_precio_por_id(card_id, api_key)
+        if carta is None:
+            return idx, None, None, None, None, None
+        precio_usd, variante, fecha = extraer_precio(carta)
+        precio_aj  = round(precio_usd * mult, 2) if precio_usd else None
+        precio_clp = int(round((precio_aj * clp_rate) / 100.0)) * 100 if (precio_aj and clp_rate) else None
+        return idx, precio_usd, precio_aj, precio_clp, variante or "-", fecha
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_enriquecer_fila, idx): idx for idx in filas_a_enriquecer}
+        for future in as_completed(futures):
+            idx, p_usd, p_aj, p_clp, variante, fecha = future.result()
+            if p_usd is not None:
+                df.at[idx, "Precio USD Mercado"]  = p_usd
+                df.at[idx, "Precio USD Ajustado"] = p_aj
+                df.at[idx, "Precio CLP Sugerido"] = p_clp
+                df.at[idx, "Variante Precio"]     = variante
+                df.at[idx, "Fecha Precio"]        = fecha
+            completadas[0] += 1
+            nombre = df.at[idx, "Nombre Original"] if "Nombre Original" in df.columns else str(idx)
+            if status_box:
+                status_box.markdown(
+                    f"💰 **{completadas[0]}/{total}** precios obtenidos — última: **{nombre}**"
+                )
+            if progress_bar:
+                progress_bar.progress(completadas[0] / total)
+
+    return df
 
 
 def procesar_carta(fila: dict, api_key: str | None = None, clp_rate: float = 0) -> dict:
@@ -505,6 +609,7 @@ def procesar_carta(fila: dict, api_key: str | None = None, clp_rate: float = 0) 
         conf, revisar = calcular_confianza(metodo, tiene_numero, False)
         return {
             **base,
+            "Card ID": "-",
             "Set": "No encontrado", "Número Carta": "-", "Número Coincide": "-",
             "Rareza": "-", "Confianza": conf, "Revisar": "Sí" if revisar else "No",
             "Precio USD Mercado": None, "Precio USD Ajustado": None,
@@ -560,6 +665,8 @@ def _fmt_clp(v) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def exportar_excel(df: pd.DataFrame) -> bytes:
+    # Card ID es un campo interno de enriquecimiento; no va al Excel del cliente.
+    df = df.drop(columns=["Card ID"], errors="ignore")
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="Catálogo TCG")
@@ -1909,7 +2016,59 @@ pero la API trajo otra versión → **revisar**.
             st.session_state["candidatos"] = {}
         st.session_state["df_result"] = df_final
 
-    # Mostrar dashboard si hay resultados en session_state
+    # ── Segundo paso: enriquecer precios vía API ───────────────────────────────
+    if "df_result" in st.session_state and _DB_LOADED:
+        df_cur = st.session_state["df_result"]
+        sin_precio = (
+            "Card ID" in df_cur.columns and
+            df_cur["Card ID"].notna().any() and
+            df_cur["Precio USD Mercado"].isna().any()
+        )
+        if sin_precio:
+            n_sin = int(df_cur["Precio USD Mercado"].isna().sum())
+            st.markdown("---")
+            st.markdown(f"""
+            <div style="background:#1A2A1A;border:1px solid #48BB78;border-radius:12px;
+                        padding:1rem 1.25rem;margin-bottom:0.5rem;">
+                <p style="color:#9AE6B4;font-weight:700;margin:0 0 4px;font-size:1.05rem;">
+                    💰 Paso 2 opcional: obtener precios de mercado
+                </p>
+                <p style="color:#A0AEC0;font-size:0.9rem;margin:0;">
+                    Las <b style="color:#F6AD55;">{n_sin} cartas</b> identificadas aún no tienen precio
+                    (la base local no los incluye). Pulsa el botón para consultarlos a la API ahora —
+                    cada carta ya está identificada por su ID, así que cada consulta es una sola
+                    petición directa, sin búsqueda. Tarda lo que la API tarde, no la identificación.
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+            if st.button(
+                f"💰 Obtener precios ({n_sin} cartas)",
+                type="secondary",
+                use_container_width=True,
+                key="btn_precios",
+            ):
+                _reset_stats()
+                prog2    = st.progress(0)
+                status2  = st.empty()
+                t2       = time.time()
+                df_enriq = enriquecer_precios_en_lote(
+                    st.session_state["df_result"],
+                    api_key or None,
+                    clp_rate,
+                    progress_bar=prog2,
+                    status_box=status2,
+                )
+                dur2 = time.time() - t2
+                with _STATS_LOCK:
+                    s2 = dict(_STATS)
+                status2.success(
+                    f"✅ Precios obtenidos en {dur2:.0f}s — "
+                    f"{s2['requests']} peticiones, {s2['rate_limited']} rate-limits."
+                )
+                st.session_state["df_result"] = df_enriq
+                st.rerun()
+
+
     if "df_result" in st.session_state:
         render_dashboard(st.session_state["df_result"], clp_rate=clp_rate, comision=comision)
 
