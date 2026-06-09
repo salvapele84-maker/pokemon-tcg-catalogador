@@ -1,5 +1,9 @@
 import time
 import io
+import os
+import json
+import glob
+import difflib
 import threading
 import requests
 import pandas as pd
@@ -75,6 +79,77 @@ _STATS_LOCK = threading.Lock()
 
 # Config ajustable desde el sidebar (la lee _raw_query y el loop de proceso)
 _CFG = {"throttle": 0.2, "max_workers": 4}
+
+# ── Base de datos LOCAL (opcional, recomendada) ───────────────────────────────
+# Si el usuario descarga la base de pokemontcg.io (repo PokemonTCG/pokemon-tcg-data,
+# carpeta cards/en renombrada a card_data), la cargamos en memoria y buscamos ahí:
+# instantáneo, completo y sin depender de que la API esté en pie.
+_DB_CARDS: list = []
+_DB_NAMES: list = []       # nombres únicos, para sugerencias "¿quisiste decir…?"
+_DB_LOADED = False
+
+
+def cargar_base_local(carpeta: str) -> int:
+    """Carga todos los .json de una carpeta (cada uno es una lista de cartas)."""
+    global _DB_CARDS, _DB_NAMES, _DB_LOADED
+    cards = []
+    for path in sorted(glob.glob(os.path.join(carpeta, "*.json"))):
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                cards.extend(data)
+            elif isinstance(data, dict) and "data" in data:
+                cards.extend(data["data"])
+        except Exception:
+            continue
+    _DB_CARDS = cards
+    _DB_NAMES = sorted({c.get("name", "") for c in cards if c.get("name")})
+    _DB_LOADED = bool(cards)
+    return len(cards)
+
+
+def _buscar_local(nombre_en: str) -> list:
+    """Match parcial por nombre en la base local (imita el comportamiento de la API)."""
+    q = nombre_en.strip().lower()
+    if not q:
+        return []
+    return [c for c in _DB_CARDS if q in c.get("name", "").lower()]
+
+
+def _pool_nombre(nombre_en: str, api_key: str | None) -> list:
+    """Pool de cartas por nombre: de la base local si está cargada, si no de la API."""
+    if _DB_LOADED:
+        return _buscar_local(nombre_en)
+    return _raw_query(f'name:"{nombre_en}"', api_key, page_size=50)
+
+
+def sugerir_nombres(nombre: str, api_key: str | None = None, n: int = 4) -> list:
+    """Devuelve nombres de cartas parecidos a 'nombre' (para corregir typos).
+
+    Usa la base local si está cargada (instantáneo y completo). Si no, intenta
+    una búsqueda suelta en la API como aproximación.
+    """
+    q = (nombre or "").strip()
+    if not q:
+        return []
+    universo = _DB_NAMES
+    if not universo:
+        # Sin base local: aproximación vía API con la primera palabra
+        try:
+            primera = q.split()[0]
+            res = _raw_query(f'name:"{primera}*"', api_key, page_size=25)
+            universo = sorted({c.get("name", "") for c in res if c.get("name")})
+        except Exception:
+            universo = []
+    if not universo:
+        return []
+    # Coincidencias por similitud (typos) + por subcadena (prefijos)
+    cercanos = difflib.get_close_matches(q, universo, n=n, cutoff=0.6)
+    ql = q.lower()
+    subcadena = [x for x in universo if ql in x.lower() and x not in cercanos]
+    salida = (cercanos + subcadena)[:n]
+    return salida
 
 
 def _reset_stats():
@@ -190,11 +265,10 @@ def buscar_carta(nombre_en, tipo, regulation_mark, numero, api_key) -> tuple[lis
     def _exactos(lst):
         return [c for c in lst if c.get("name", "").strip().lower() == nn]
 
-    # ── VÍA RÁPIDA: una sola consulta amplia por nombre (filtrado en Python) ──
-    # Resuelve el 99% de las cartas con 1 sola petición → pocos 429, muy rápido.
-    amplia = _raw_query(f'name:"{nombre_en}"', api_key, page_size=50)
+    # ── VÍA RÁPIDA: pool por nombre (base local si está cargada; si no, API) ──
+    amplia = _pool_nombre(nombre_en, api_key)
     ex = _exactos(amplia)
-    if ex:  # encontramos el nombre EXACTO en la consulta amplia
+    if ex:  # encontramos el nombre EXACTO
         if tiene_numero:
             por_num = [c for c in ex if str(c.get("number", "")).lower() == numero.lower()]
             if por_num:
@@ -211,32 +285,30 @@ def buscar_carta(nombre_en, tipo, regulation_mark, numero, api_key) -> tuple[lis
                 return pt, "nombre + tipo"
         return ex, "solo nombre"
 
-    # ── FALLBACK DIRIGIDO ─────────────────────────────────────────────────────
-    # El nombre exacto NO estaba en la consulta amplia (p. ej. "Iono" sepultada
-    # entre "Iono's …", o un nombre con muchos reprints), o la consulta vino
-    # vacía. Hacemos consultas precisas que filtran en el servidor.
-    if tiene_numero:
-        r = _raw_query(f'name:"{nombre_en}" number:"{numero}"', api_key)
-        rex = _exactos(r)
-        if rex:
-            return rex, "número exacto"
-        if r:
-            return r, "número exacto"
-    if tiene_mark:
-        partes = [f'name:"{nombre_en}"', f"regulationMark:{regulation_mark.upper()}"]
+    # ── FALLBACK DIRIGIDO (solo en modo API; en modo local el pool ya es total)
+    if not _DB_LOADED:
+        if tiene_numero:
+            r = _raw_query(f'name:"{nombre_en}" number:"{numero}"', api_key)
+            rex = _exactos(r)
+            if rex:
+                return rex, "número exacto"
+            if r:
+                return r, "número exacto"
+        if tiene_mark:
+            partes = [f'name:"{nombre_en}"', f"regulationMark:{regulation_mark.upper()}"]
+            if tipo_api:
+                partes.append(f"supertype:{tipo_api}")
+            r = _raw_query(" ".join(partes), api_key)
+            rex = _exactos(r) or r
+            if rex:
+                return rex, "nombre + bloque"
         if tipo_api:
-            partes.append(f"supertype:{tipo_api}")
-        r = _raw_query(" ".join(partes), api_key)
-        rex = _exactos(r) or r
-        if rex:
-            return rex, "nombre + bloque"
-    if tipo_api:
-        r = _raw_query(f'name:"{nombre_en}" supertype:{tipo_api}', api_key)
-        rex = _exactos(r) or r
-        if rex:
-            return rex, "nombre + tipo"
+            r = _raw_query(f'name:"{nombre_en}" supertype:{tipo_api}', api_key)
+            rex = _exactos(r) or r
+            if rex:
+                return rex, "nombre + tipo"
 
-    # Último recurso: lo que haya devuelto la consulta amplia
+    # Último recurso: lo que haya devuelto el pool por nombre
     if amplia:
         return amplia, "solo nombre"
     return [], "sin resultados"
@@ -1358,6 +1430,20 @@ def render_dashboard(df_result: pd.DataFrame, clp_rate: float = 0, comision: flo
 # MAIN
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _agregar_resultado_al_dashboard(res: dict) -> int:
+    """Añade un resultado (de procesar_carta) al df_result en sesión. Devuelve su índice."""
+    cand = res.pop("_candidatos", []) if isinstance(res, dict) else []
+    df_new = pd.DataFrame([res])
+    if "df_result" in st.session_state and not st.session_state["df_result"].empty:
+        df_comb = pd.concat([st.session_state["df_result"], df_new], ignore_index=True)
+    else:
+        df_comb = df_new
+    st.session_state["df_result"] = df_comb
+    idx = len(df_comb) - 1
+    st.session_state.setdefault("candidatos", {})[idx] = cand
+    return idx
+
+
 def main():
     st.set_page_config(
         page_title="Catalogador Pokémon TCG",
@@ -1479,6 +1565,22 @@ def main():
         )
         _CFG["max_workers"] = cfg_workers
         _CFG["throttle"] = cfg_throttle
+
+        st.markdown("---")
+        st.subheader("📂 Base de datos local")
+        if not _DB_LOADED:
+            for cp in ("card_data", os.path.join("pokemon-tcg-data", "cards", "en"),
+                       os.path.join("pokemon-tcg-data-master", "cards", "en")):
+                if os.path.isdir(cp) and cargar_base_local(cp):
+                    break
+        if _DB_LOADED:
+            st.success(f"✅ Base local activa — {len(_DB_CARDS):,} cartas. "
+                       "Búsqueda instantánea, sin depender de la API.")
+            st.caption("Nota: los precios de mercado vienen de la API en vivo; en modo "
+                       "local pueden no aparecer si los datos estáticos no los traen.")
+        else:
+            st.info("Usando la API en vivo. Para que NO dependa de la API (instantáneo y "
+                    "estable aunque la API esté caída), descarga la base local — ver README.")
         st.markdown("---")
         st.subheader("📋 Columnas del archivo")
         st.markdown("""
@@ -1626,17 +1728,60 @@ pero la API trajo otra versión → **revisar**.
                 }
                 with st.spinner(f"Buscando «{m_nombre}»…"):
                     res = procesar_carta(fila_manual, api_key or None, clp_rate)
-                cand = res.pop("_candidatos", []) if isinstance(res, dict) else []
-                df_new = pd.DataFrame([res])
-                if "df_result" in st.session_state:
-                    df_comb = pd.concat([st.session_state["df_result"], df_new], ignore_index=True)
+                if res.get("Set") == "No encontrado":
+                    # No encontrada: en vez de agregarla a ciegas, ofrecemos sugerencias
+                    sugerencias = sugerir_nombres(m_nombre, api_key or None)
+                    st.session_state["manual_no_encontrada"] = {
+                        "fila": fila_manual, "sugerencias": sugerencias,
+                    }
+                    st.rerun()
                 else:
-                    df_comb = df_new
-                st.session_state["df_result"] = df_comb
-                cands = st.session_state.setdefault("candidatos", {})
-                cands[len(df_comb) - 1] = cand
-                st.success(f"✅ «{m_nombre}» agregada al dashboard.")
-                st.rerun()
+                    _agregar_resultado_al_dashboard(res)
+                    st.success(f"✅ «{m_nombre}» agregada al dashboard.")
+                    st.rerun()
+
+    # ── Sugerencia «¿quisiste decir…?» cuando la carta no se encontró ─────────
+    pendiente = st.session_state.get("manual_no_encontrada")
+    if pendiente:
+        fila_p = pendiente["fila"]
+        sugs = pendiente["sugerencias"]
+        nombre_p = fila_p["nombre"]
+        st.markdown(f"""
+        <div style="background:#2D2018;border:1px solid #D69E2E;border-radius:12px;
+                    padding:1rem 1.25rem;margin-top:6px;">
+            <p style="color:#F6E05E;font-weight:700;margin:0 0 2px;">
+                🔎 No encontré «{nombre_p}»
+            </p>
+            <p style="color:#CBD5E0;font-size:0.9rem;margin:0;">
+                {"¿Quisiste decir alguna de estas? Toca para corregir y reprocesar:"
+                 if sugs else "No hay nombres parecidos en la base. Revisa la ortografía o agrégala igual."}
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        if sugs:
+            cols_s = st.columns(min(len(sugs), 4))
+            for i, s in enumerate(sugs):
+                if cols_s[i % len(cols_s)].button(f"✓ {s}", key=f"sug_{i}", use_container_width=True):
+                    fila_corr = dict(fila_p, nombre=s)
+                    with st.spinner(f"Buscando «{s}»…"):
+                        res2 = procesar_carta(fila_corr, api_key or None, clp_rate)
+                    _agregar_resultado_al_dashboard(res2)
+                    st.session_state.pop("manual_no_encontrada", None)
+                    st.success(f"✅ «{s}» agregada al dashboard.")
+                    st.rerun()
+
+        c_ig, c_ca = st.columns(2)
+        if c_ig.button("➕ Agregar igual (como no encontrada)", use_container_width=True):
+            with st.spinner("Agregando…"):
+                res3 = procesar_carta(fila_p, api_key or None, clp_rate)
+            _agregar_resultado_al_dashboard(res3)
+            st.session_state.pop("manual_no_encontrada", None)
+            st.warning(f"Se agregó «{nombre_p}» como no encontrada.")
+            st.rerun()
+        if c_ca.button("✕ Cancelar", use_container_width=True):
+            st.session_state.pop("manual_no_encontrada", None)
+            st.rerun()
 
     # ── Procesamiento ─────────────────────────────────────────────────────────
     st.markdown("---")
