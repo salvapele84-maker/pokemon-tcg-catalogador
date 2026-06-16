@@ -3178,7 +3178,7 @@ def _render_sidebar(api_key_default: str = "") -> tuple[str | None, float, float
         st.caption("Compra, vende y descubre dentro de una experiencia demostrativa.")
 
         # Navegación accesible en móvil.
-        nav_pages = ["Inicio", "NexoRuta", "Marketplace", "Vender", "Tasador", "Meta Lab", "Subastas", "Servicios", "Feedback"]
+        nav_pages = ["Inicio", "Marketplace", "Vender", "Tasador", "Meta Lab", "Subastas", "Servicios", "Feedback"]
         current = st.session_state.get("page", "Inicio")
         current_nav = "Marketplace" if current == "Detalle" else current
         # Sincroniza el selector con botones y enlaces internos sin provocar rebotes.
@@ -5071,753 +5071,789 @@ def render_home() -> None:
 
 
 
-def main():
-    st.set_page_config(page_title="NexoGeek · Constructor de Mazos",page_icon="✦",layout="wide",initial_sidebar_state="expanded")
-    st.markdown(DARK_CSS + EXTRA_CSS + ORIGINAL_IDENTITY_CSS + PILOT_V3_CSS + META_LAB_CSS + META_DECK_BUILDER_CSS,unsafe_allow_html=True)
-    _init_demo_state();_init_meta_state()
-    api_key,clp_rate,comision=_render_sidebar()
-    page=_render_top_navigation();_track_event("visita_pagina",page,once=True)
-    if page=="Inicio":render_home()
-    elif page=="Marketplace":
-        context=st.session_state.pop("meta_marketplace_context",None)
-        if context:st.info(f"Buscando **{context.get('carta')}** para completar **{context.get('mazo')}**.")
-        render_marketplace()
-    elif page=="Detalle":render_product_detail()
-    elif page=="Vender":render_sell()
-    elif page=="Tasador":render_catalogador(api_key,clp_rate,comision)
-    elif page=="Meta Lab":render_meta_lab(api_key,clp_rate)
-    elif page=="Subastas":render_auctions()
-    elif page=="Servicios":render_services()
-    elif page=="Feedback":render_feedback()
-    st.markdown("<br><hr style='border:none;border-top:2px solid rgba(40,22,58,.12);'>",unsafe_allow_html=True)
-    foot1,foot2=st.columns([3,1]);foot1.caption("NexoGeek · Piloto funcional. Constructor visual y carrito de mazo en modo demostración.");foot2.caption("Marketplace · Colección · Competitivo")
-
 
 # ══════════════════════════════════════════════════════════════════════════════
-# NEXORUTA · CAPA DIFERENCIAL PARA EL PILOTO 10/10
+# NEXOGEEK · EDICIÓN MARKETPLACE GEEK
+# La navegación pública prioriza el marketplace geek. Meta Lab y el constructor
+# visual quedan disponibles como herramientas TCG secundarias dentro de un hub propio.
 # ══════════════════════════════════════════════════════════════════════════════
 
-NEXO_RUTA_CSS = r"""
+GEEK_MARKETPLACE_CSS = r"""
 <style>
 :root{
-  --ruta-purple:#43215B;--ruta-coral:#FF686B;--ruta-gold:#FFC857;
-  --ruta-mint:#35C7B4;--ruta-cream:#FFF8ED;--ruta-ink:#28163A;
+  --ng-ink:#28163A;
+  --ng-purple:#5B2A86;
+  --ng-coral:#FF686B;
+  --ng-gold:#FFC857;
+  --ng-mint:#35C7B4;
+  --ng-cream:#FFF8ED;
+  --ng-paper:#FFFCF7;
 }
-.ruta-hero{
-  position:relative;overflow:hidden;border:3px solid var(--ruta-ink);border-radius:26px;
-  padding:2.1rem 2.2rem;background:
-  radial-gradient(circle at 87% 50%,rgba(255,200,87,.96) 0 9%,transparent 9.5%),
-  radial-gradient(circle at 87% 50%,transparent 0 20%,rgba(53,199,180,.95) 20.5% 27%,transparent 27.5%),
-  radial-gradient(circle at 87% 50%,transparent 0 36%,rgba(255,104,107,.92) 36.5% 43%,transparent 43.5%),
+.geek-market-hero{
+  position:relative;overflow:hidden;border:3px solid var(--ng-ink);border-radius:28px;
+  padding:2.35rem 2.45rem;background:
+  radial-gradient(circle at 88% 42%,rgba(255,200,87,.98) 0 9%,transparent 9.5%),
+  radial-gradient(circle at 88% 42%,transparent 0 18%,rgba(53,199,180,.92) 18.5% 25%,transparent 25.5%),
+  radial-gradient(circle at 88% 42%,transparent 0 34%,rgba(255,104,107,.9) 34.5% 41%,transparent 41.5%),
   linear-gradient(135deg,#351649 0%,#5E2C86 58%,#7B46D9 100%);
-  color:white;box-shadow:12px 12px 0 var(--ruta-gold);margin-bottom:1.5rem;
+  color:white;box-shadow:12px 12px 0 var(--ng-gold);margin-bottom:1.45rem;
 }
-.ruta-hero:after{content:'✦';position:absolute;right:8%;top:18%;font-size:2.1rem;color:white;transform:rotate(14deg)}
-.ruta-hero h1{font-size:clamp(2rem,4vw,4.2rem);max-width:760px;line-height:.98;margin:.65rem 0 1rem;color:#FFF9ED!important;letter-spacing:-.045em}
-.ruta-hero h1 em{color:var(--ruta-gold);font-style:normal;text-decoration:underline;text-decoration-color:var(--ruta-coral);text-underline-offset:9px}
-.ruta-hero p{max-width:690px;font-size:1.03rem;line-height:1.65;color:#F9ECFF!important}
-.ruta-kicker{display:inline-flex;background:var(--ruta-gold);color:var(--ruta-ink);padding:.42rem .78rem;border:2px solid var(--ruta-ink);border-radius:9px 9px 3px 9px;font-size:.72rem;font-weight:900;letter-spacing:.08em;box-shadow:4px 4px 0 var(--ruta-coral)}
-.ruta-form-card,.ruta-panel{
-  border:2px solid var(--ruta-ink);border-radius:20px;background:rgba(255,253,248,.96);
-  padding:1.15rem 1.2rem;box-shadow:6px 6px 0 rgba(67,33,91,.14);height:100%;
+.geek-market-hero:after{
+  content:'✦';position:absolute;right:8.5%;top:16%;font-size:2rem;color:white;
+  text-shadow:-56px 68px 0 var(--ng-mint),-110px 20px 0 var(--ng-coral),25px 100px 0 var(--ng-gold);
 }
-.ruta-form-card h3,.ruta-panel h3{color:var(--ruta-ink)!important;margin:.1rem 0 .35rem}
-.ruta-mini{font-size:.8rem;color:#75667D;line-height:1.45}
-.ruta-result{
- border:3px solid var(--ruta-ink);border-radius:24px;padding:1.35rem 1.45rem;
- background:linear-gradient(135deg,#FFF9EF 0%,#F2FFFC 100%);box-shadow:10px 10px 0 var(--ruta-mint);margin:1rem 0 1.4rem;
+.geek-market-hero h1{
+  max-width:760px;font-size:clamp(2.2rem,4.2vw,4.2rem);line-height:.98;margin:.8rem 0 1rem;
+  color:white !important;letter-spacing:-.045em;
 }
-.ruta-result-head{display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;flex-wrap:wrap}
-.ruta-score-orb{width:92px;height:92px;border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--ruta-purple);color:white;border:4px solid var(--ruta-ink);box-shadow:5px 5px 0 var(--ruta-gold);font-weight:900}
-.ruta-score-orb b{font-size:1.8rem;line-height:1}.ruta-score-orb small{font-size:.62rem;letter-spacing:.08em}
-.ruta-result h2{font-size:1.7rem;margin:.1rem 0 .35rem;color:var(--ruta-ink)!important}
-.ruta-result p{color:#685873;margin:.2rem 0}
-.ruta-metric-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.65rem;margin-top:1rem}
-.ruta-metric{border:2px solid var(--ruta-ink);border-radius:14px;padding:.72rem;background:white;box-shadow:3px 3px 0 var(--ruta-gold)}
-.ruta-metric span{display:block;color:#7B6B82;font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.045em}.ruta-metric b{font-size:1.05rem;color:var(--ruta-ink)}
-.route-road{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.8rem;margin:1rem 0}
-.route-step{position:relative;border:2px solid var(--ruta-ink);border-radius:17px;padding:1rem;background:#fff;min-height:150px;box-shadow:5px 5px 0 rgba(255,104,107,.55)}
-.route-step .num{width:31px;height:31px;border-radius:50%;display:grid;place-items:center;background:var(--ruta-purple);color:white;border:2px solid var(--ruta-ink);font-weight:900;margin-bottom:.55rem}
-.route-step h4{margin:.15rem 0 .4rem;color:var(--ruta-ink)!important}.route-step p{font-size:.82rem;color:#75667D;line-height:1.45}
-.score-bar{height:11px;border:2px solid var(--ruta-ink);border-radius:999px;background:#EFE5F4;overflow:hidden;margin:.3rem 0 .7rem}.score-bar span{display:block;height:100%;background:linear-gradient(90deg,var(--ruta-coral),var(--ruta-gold),var(--ruta-mint))}
-.route-alt{border:2px solid var(--ruta-ink);border-radius:17px;padding:1rem;background:#fff;box-shadow:5px 5px 0 rgba(53,199,180,.5);height:100%}
-.route-alt h4{margin:.2rem 0;color:var(--ruta-ink)!important}.route-alt .rank{font-size:.68rem;font-weight:900;color:#74478E;letter-spacing:.06em}.route-alt .score{font-size:1.35rem;font-weight:900;color:var(--ruta-purple)}
-.nexo-opportunity{border:2px solid var(--ruta-ink);border-radius:16px;padding:.9rem;background:#FFF9EE;margin-bottom:.65rem;box-shadow:4px 4px 0 rgba(255,200,87,.65)}
-.nexo-opportunity strong{color:var(--ruta-ink)}
-.trade-match{border:3px dashed var(--ruta-purple);border-radius:20px;padding:1.2rem;background:linear-gradient(135deg,#F4EAFF,#E9FFFA);text-align:center}
-.trade-arrow{font-size:2rem;color:var(--ruta-coral);font-weight:900}
-.tournament-board{border:2px solid var(--ruta-ink);border-radius:20px;background:#fff;padding:1.2rem;box-shadow:7px 7px 0 var(--ruta-gold)}
-.presentation-strip{border:2px solid var(--ruta-ink);border-radius:16px;background:#FFF2D5;padding:.8rem 1rem;box-shadow:4px 4px 0 var(--ruta-coral);margin:.85rem 0 1.2rem}
-@media (max-width:900px){.ruta-metric-grid,.route-road{grid-template-columns:1fr 1fr}.ruta-hero{padding:1.4rem}.ruta-hero h1{font-size:2.35rem}.ruta-hero:after{display:none}}
-@media (max-width:560px){.ruta-metric-grid,.route-road{grid-template-columns:1fr}.ruta-score-orb{width:78px;height:78px}.ruta-result{padding:1rem}}
+.geek-market-hero h1 em{color:var(--ng-gold);font-style:normal;border-bottom:6px solid var(--ng-coral);}
+.geek-market-hero p{max-width:720px;font-size:1.04rem;color:#FFF9EE;margin:0 0 1.15rem;line-height:1.62;}
+.geek-eyebrow{
+  display:inline-flex;background:var(--ng-gold);color:var(--ng-ink);border:2px solid var(--ng-ink);
+  border-radius:10px 10px 3px 10px;padding:.38rem .7rem;font-size:.7rem;font-weight:900;
+  letter-spacing:.11em;text-transform:uppercase;box-shadow:4px 4px 0 var(--ng-coral);
+}
+.geek-chip-row{display:flex;gap:.55rem;flex-wrap:wrap;margin-top:1rem}
+.geek-chip-row span{
+  border:1px solid rgba(255,255,255,.6);background:rgba(255,255,255,.1);color:white;
+  border-radius:999px;padding:.38rem .66rem;font-size:.72rem;font-weight:800;
+}
+.category-tile{
+  min-height:150px;border:2px solid var(--ng-ink);border-radius:22px;background:var(--ng-paper);
+  box-shadow:7px 7px 0 var(--ng-gold);padding:1.15rem;display:flex;flex-direction:column;
+  justify-content:space-between;margin-bottom:.65rem;
+}
+.category-tile .icon{font-size:2rem}
+.category-tile h4{margin:.45rem 0 .3rem;color:var(--ng-ink);font-size:1rem}
+.category-tile p{margin:0;color:#75677E;font-size:.78rem;line-height:1.45}
+.community-banner{
+  border:3px solid var(--ng-ink);border-radius:25px;padding:1.7rem 1.85rem;
+  background:linear-gradient(135deg,#DDF8F3,#FFF8ED 60%,#FFE1D7);
+  box-shadow:10px 10px 0 var(--ng-coral);margin:1rem 0 1.4rem;
+}
+.community-banner h2{margin:.25rem 0;color:var(--ng-ink)}
+.community-banner p{margin:.35rem 0 0;color:#62526B;max-width:860px}
+.tool-hub-card{
+  border:2px solid var(--ng-ink);border-radius:22px;padding:1.3rem;background:white;
+  box-shadow:7px 7px 0 var(--ng-mint);min-height:175px;
+}
+.tool-hub-card.secondary{box-shadow:7px 7px 0 var(--ng-gold)}
+.tool-hub-card h3{margin:.35rem 0;color:var(--ng-ink)}
+.tool-hub-card p{color:#706278;font-size:.86rem;line-height:1.5}
+.geek-pulse{
+  border:2px dashed rgba(40,22,58,.4);background:#FFF8ED;border-radius:18px;padding:1rem 1.15rem;
+  color:#5E4E67;margin:.8rem 0 1rem;
+}
+.geek-nav-note{
+  border-left:5px solid var(--ng-coral);background:#FFF0ED;border-radius:0 14px 14px 0;
+  padding:.75rem 1rem;color:#5B405F;font-size:.82rem;margin-bottom:1rem;
+}
+.event-card{
+  border:2px solid var(--ng-ink);border-radius:20px;padding:1.1rem;background:white;
+  box-shadow:6px 6px 0 var(--ng-gold);height:100%;
+}
+.event-card .date{font-size:.7rem;font-weight:900;color:var(--ng-purple);letter-spacing:.08em;text-transform:uppercase}
+.event-card h4{color:var(--ng-ink);margin:.35rem 0}
+.event-card p{color:#726278;font-size:.82rem;line-height:1.45}
+.geek-market-strip{
+  display:grid;grid-template-columns:repeat(4,1fr);gap:.75rem;margin:1rem 0 1.25rem;
+}
+.geek-market-strip div{
+  border:2px solid var(--ng-ink);border-radius:16px;background:white;padding:.85rem;
+  box-shadow:5px 5px 0 var(--ng-mint);
+}
+.geek-market-strip strong{display:block;color:var(--ng-ink)}
+.geek-market-strip span{display:block;color:#76677D;font-size:.74rem;margin-top:.25rem}
+@media(max-width:900px){
+  .geek-market-hero{padding:1.65rem 1.35rem;box-shadow:7px 7px 0 var(--ng-gold)}
+  .geek-market-hero:after{opacity:.35}
+  .geek-market-strip{grid-template-columns:1fr 1fr}
+}
+@media(max-width:600px){
+  .geek-market-strip{grid-template-columns:1fr}
+}
 </style>
 """
 
-NEXORUTA_GOALS = [
-    "Armar un mazo competitivo",
-    "Mejorar mi colección",
-    "Vender lo que no uso",
-    "Prepararme para un torneo",
-]
-NEXORUTA_EXPERIENCE = ["Estoy empezando", "Intermedio", "Competitivo"]
-NEXORUTA_STYLES = ["Equilibrado", "Agresivo", "Control", "Flexible / adaptable"]
-NEXORUTA_COLLECTION_SOURCES = ["Colección de ejemplo", "Inventario del Tasador", "Empezar sin colección"]
 
-
-def _init_nexoruta_state() -> None:
-    defaults = {
-        "nexoruta_goal": NEXORUTA_GOALS[0],
-        "nexoruta_game": "Pokémon TCG",
-        "nexoruta_budget": 60000,
-        "nexoruta_experience": "Intermedio",
-        "nexoruta_style": "Equilibrado",
-        "nexoruta_collection_source": "Colección de ejemplo",
-        "nexoruta_result": None,
-        "nexoruta_saved": [],
-        "nexoruta_event_name": "Próximo torneo local",
-        "nexoruta_event_days": 21,
-        "nexoruta_tournament_checks": {},
-        "nexoruta_compare": [],
-    }
-    for key, value in defaults.items():
-        if key not in st.session_state:
-            st.session_state[key] = value
-
-
-def _route_inventory(source: str) -> dict[str, int]:
-    if source == "Inventario del Tasador":
-        return dict(_inventory_from_results())
-    if source == "Colección de ejemplo":
-        demo = {_meta_norm(name): int(qty) for name, qty in META_DEMO_COLLECTION.items()}
-        # Algunas repetidas intencionales permiten demostrar Detector y Trueque.
-        for name, qty in {"Ultra Ball": 7, "Buddy-Buddy Poffin": 6, "Boss's Orders": 5, "Potion": 6}.items():
-            demo[_meta_norm(name)] = max(demo.get(_meta_norm(name), 0), qty)
-        return demo
-    return {}
-
-
-def _route_price_map() -> dict[str, int]:
-    df = st.session_state.get("df_result")
-    if not isinstance(df, pd.DataFrame) or df.empty:
-        return {}
-    prices: dict[str, int] = {}
-    for _, row in df.iterrows():
-        name = row.get("Nombre EN") or row.get("Nombre Original") or ""
-        value = row.get("Precio CLP Sugerido")
-        try:
-            if str(name).strip() and pd.notna(value) and float(value) > 0:
-                prices[_meta_norm(name)] = int(float(value))
-        except Exception:
-            continue
-    return prices
-
-
-def _route_deck_difficulty(deck: dict) -> tuple[int, str]:
-    name = _meta_norm(deck.get("nombre", ""))
-    hard = ["dragapult", "control", "alakazam", "slowking", "dusknoir"]
-    easy = ["crustle", "charizard", "raging bolt", "ancient box"]
-    if any(token in name for token in hard):
-        return 4, "Alta"
-    if any(token in name for token in easy):
-        return 2, "Accesible"
-    return 3, "Media"
-
-
-def _route_deck_archetype(deck: dict) -> str:
-    name = _meta_norm(deck.get("nombre", ""))
-    description = _meta_norm(deck.get("descripcion", ""))
-    text = f"{name} {description}"
-    if any(x in text for x in ["control", "interrup", "slowking", "alakazam", "dusknoir"]):
-        return "Control"
-    if any(x in text for x in ["raging bolt", "charizard", "greninja", "presion", "agres"]):
-        return "Agresivo"
-    if any(x in text for x in ["flex", "adapt", "toolbox", "caja"]):
-        return "Flexible / adaptable"
-    return "Equilibrado"
-
-
-def _route_style_score(deck: dict, preferred_style: str) -> int:
-    actual = _route_deck_archetype(deck)
-    if preferred_style == "Equilibrado":
-        return 92 if actual == "Equilibrado" else 78
-    if preferred_style == actual:
-        return 98
-    if {preferred_style, actual} <= {"Equilibrado", "Flexible / adaptable"}:
-        return 86
-    return 66
-
-
-def _route_market_availability(missing: list[dict]) -> tuple[int, int, float]:
-    if not missing:
-        return 0, 0, 100.0
-    available = sum(1 for row in missing if _meta_market_matches(row.get("Carta", "")))
-    total = len(missing)
-    ratio = (available / total * 100) if total else 100.0
-    return available, total, round(ratio, 1)
-
-
-def _route_goal_weights(goal: str) -> dict[str, float]:
-    if goal == "Prepararme para un torneo":
-        return {"competition": .36, "compatibility": .22, "affordability": .12, "style": .14, "availability": .06, "stability": .10}
-    if goal == "Mejorar mi colección":
-        return {"competition": .16, "compatibility": .34, "affordability": .18, "style": .08, "availability": .12, "stability": .12}
-    if goal == "Vender lo que no uso":
-        return {"competition": .12, "compatibility": .28, "affordability": .24, "style": .08, "availability": .12, "stability": .16}
-    return {"competition": .27, "compatibility": .30, "affordability": .22, "style": .10, "availability": .05, "stability": .06}
-
-
-def _route_deck_metrics(deck: dict, inventory: dict[str, int], budget: int,
-                        preferred_style: str, goal: str, game: str) -> dict:
-    pct, missing, owned, required = _deck_completion(deck, inventory)
-    full_cost = max(int(deck.get("costo", 0) or 0), 0)
-    missing_ratio = max(0.0, 1.0 - pct / 100.0) if inventory else 1.0
-    missing_cost = int(round(full_cost * missing_ratio / 1000.0) * 1000) if full_cost else 0
-    tier_base = {"S": 96, "A": 86, "B": 74, "C": 62}.get(str(deck.get("tier", "B")).upper(), 70)
-    competition = max(45, min(100, int(round(tier_base + (float(deck.get("win_rate", 50)) - 50) * 1.6))))
-    compatibility = int(round(pct)) if inventory else 50
-    if missing_cost <= 0:
-        affordability = 100
-    elif budget <= 0:
-        affordability = 35
-    elif missing_cost <= budget:
-        affordability = min(100, 78 + int((budget - missing_cost) / max(budget, 1) * 22))
-    else:
-        affordability = max(20, int(budget / missing_cost * 78))
-    style_fit = _route_style_score(deck, preferred_style)
-    available, missing_unique, availability_ratio = _route_market_availability(missing)
-    availability = 100 if not missing else max(45, int(round(45 + availability_ratio * .55)))
-    stability = 94 if game == "Pokémon TCG" else 84
-    weights = _route_goal_weights(goal)
-    score = round(
-        competition * weights["competition"] + compatibility * weights["compatibility"] +
-        affordability * weights["affordability"] + style_fit * weights["style"] +
-        availability * weights["availability"] + stability * weights["stability"]
-    )
-    difficulty_num, difficulty_label = _route_deck_difficulty(deck)
-    return {
-        "deck": deck, "score": int(max(1, min(score, 100))), "completion": pct,
-        "missing": missing, "owned": owned, "required": required, "full_cost": full_cost,
-        "missing_cost": missing_cost, "competition": competition, "compatibility": compatibility,
-        "affordability": affordability, "style_fit": style_fit, "availability": availability,
-        "market_available": available, "missing_unique": missing_unique,
-        "stability": stability, "difficulty": difficulty_num, "difficulty_label": difficulty_label,
-        "archetype": _route_deck_archetype(deck),
-    }
-
-
-def _route_opportunities(inventory: dict[str, int], game: str = "Pokémon TCG") -> list[dict]:
-    dataset, _ = _meta_dataset(game, META_DEMO.get(game, {}).get("formatos", ["Standard"])[0])
-    usage: dict[str, int] = {}
-    original_names: dict[str, str] = {}
-    for deck in dataset.get("mazos", []):
-        seen = set()
-        for row in deck.get("core", []):
-            name = str(row.get("carta", "")).strip()
-            norm = _meta_norm(name)
-            if not norm or norm in seen or not _meta_is_real_card_row(row):
-                continue
-            usage[norm] = usage.get(norm, 0) + 1
-            original_names[norm] = name
-            seen.add(norm)
-    prices = _route_price_map()
-    output = []
-    for norm, qty in inventory.items():
-        qty = max(int(qty or 0), 0)
-        meta_use = usage.get(norm, 0)
-        extra = max(qty - 4, 0)
-        action = "Conservar: aparece en varios mazos" if meta_use >= 3 else "Revisar para venta o trueque" if meta_use == 0 else "Útil como carta flexible"
-        output.append({
-            "Carta": original_names.get(norm, norm.title()), "Copias": qty,
-            "Mazos meta": meta_use, "Repetidas": extra, "Acción sugerida": action,
-            "Precio conocido": prices.get(norm),
-        })
-    return sorted(output, key=lambda x: (x["Repetidas"], -x["Mazos meta"], x["Copias"]), reverse=True)
-
-
-def _generate_nexoruta(goal: str, game: str, budget: int, experience: str,
-                       preferred_style: str, collection_source: str) -> dict:
-    fmt = META_DEMO.get(game, {}).get("formatos", ["Standard"])[0]
-    dataset, source = _meta_dataset(game, fmt)
-    inventory = _route_inventory(collection_source)
-    metrics = [
-        _route_deck_metrics(deck, inventory, int(budget), preferred_style, goal, game)
-        for deck in dataset.get("mazos", [])
-    ]
-    metrics.sort(key=lambda x: (x["score"], x["competition"], -x["missing_cost"]), reverse=True)
-    opportunities = _route_opportunities(inventory, game)
-    result = {
-        "goal": goal, "game": game, "format": fmt, "budget": int(budget),
-        "experience": experience, "style": preferred_style, "collection_source": collection_source,
-        "inventory": inventory, "ranking": metrics, "best": metrics[0] if metrics else None,
-        "opportunities": opportunities, "source": source,
-        "created_at": datetime.now().isoformat(timespec="minutes"),
-    }
-    return result
-
-
-def _route_steps(result: dict) -> list[tuple[str, str]]:
-    best = result.get("best") or {}
-    deck = best.get("deck", {})
-    missing_units = sum(int(x.get("Faltan", 0)) for x in best.get("missing", []))
-    goal = result.get("goal")
-    if goal == "Vender lo que no uso":
-        return [
-            ("Detecta oportunidades", "Revisa repetidas y cartas que no aparecen en tus objetivos competitivos."),
-            ("Tasa antes de publicar", "Confirma edición, estado y precio para evitar vender por debajo de referencia."),
-            ("Publica con confianza", "Crea anuncios claros y usa reputación, entrega y fotografías para reducir fricción."),
-            ("Reinvierte con propósito", f"Usa lo recuperado para acercarte a {deck.get('nombre','tu próximo objetivo')}."),
-        ]
-    if goal == "Prepararme para un torneo":
-        return [
-            ("Cierra tu lista", f"Revisa las {missing_units} copia(s) pendientes y fija una versión estable del mazo."),
-            ("Valida legalidad", "Confirma regulación, formato, decklist y accesorios antes de registrar."),
-            ("Practica matchups", "Prioriza los enfrentamientos más frecuentes y los que aparecen como desfavorables."),
-            ("Ejecuta tu checklist", "Organiza logística, registro, fundas, dados, horarios y plan de rondas."),
-        ]
-    if goal == "Mejorar mi colección":
-        return [
-            ("Ordena lo que tienes", "Centraliza cantidades, versiones y estados en Mi colección/Tasador."),
-            ("Prioriza cartas versátiles", "Conserva staples que aparecen en varios arquetipos y evita compras duplicadas."),
-            ("Completa un objetivo", f"{deck.get('nombre','El mazo recomendado')} aprovecha mejor tu colección actual."),
-            ("Libera valor dormido", "Tasa repetidas y decide cuáles vender, cambiar o reservar para futuros mazos."),
-        ]
-    return [
-        ("Elige una dirección", f"{deck.get('nombre','El mazo recomendado')} logra el mejor equilibrio para tu perfil."),
-        ("Marca lo que ya tienes", "Usa el checklist visual para ajustar cada copia sin necesidad de cargar un Excel."),
-        ("Compra solo lo necesario", f"Sincroniza las {missing_units} copia(s) faltantes con el carrito del mazo."),
-        ("Prepárate para jugar", "Estudia matchups, descarga la lista y crea una rutina breve de pruebas."),
-    ]
-
-
-def _route_score_html(best: dict) -> str:
-    deck = best.get("deck", {})
-    budget_fit = "Dentro de presupuesto" if best.get("missing_cost", 0) <= st.session_state.get("nexoruta_budget", 0) else "Supera el presupuesto"
-    return f"""
-    <div class="ruta-result">
-      <div class="ruta-result-head">
-        <div><span class="ruta-kicker">RECOMENDACIÓN PERSONALIZADA</span>
-          <h2>{escape(str(deck.get('nombre','Tu ruta NexoGeek')))}</h2>
-          <p>{escape(str(deck.get('descripcion','Una ruta construida a partir de tu objetivo, presupuesto y colección.')))}</p>
-        </div>
-        <div class="ruta-score-orb"><b>{int(best.get('score',0))}</b><small>NEXOSCORE</small></div>
-      </div>
-      <div class="ruta-metric-grid">
-        <div class="ruta-metric"><span>Colección cubierta</span><b>{float(best.get('completion',0)):.1f}%</b></div>
-        <div class="ruta-metric"><span>Costo faltante</span><b>{_fmt_clp(best.get('missing_cost',0))}</b></div>
-        <div class="ruta-metric"><span>Dificultad</span><b>{escape(str(best.get('difficulty_label','Media')))}</b></div>
-        <div class="ruta-metric"><span>Presupuesto</span><b>{escape(budget_fit)}</b></div>
-      </div>
-    </div>
-    """
-
-
-def _render_route_metrics_breakdown(best: dict) -> None:
-    st.markdown("#### ¿Por qué esta recomendación?")
-    metrics = [
-        ("Competitividad", int(best.get("competition", 0))),
-        ("Compatibilidad contigo", int(best.get("compatibility", 0))),
-        ("Accesibilidad económica", int(best.get("affordability", 0))),
-        ("Afinidad con tu estilo", int(best.get("style_fit", 0))),
-        ("Estabilidad del formato", int(best.get("stability", 0))),
-    ]
-    cols = st.columns(len(metrics))
-    for col, (label, value) in zip(cols, metrics):
-        with col:
-            st.markdown(f"<div class='ruta-panel'><b>{escape(label)}</b><div class='score-bar'><span style='width:{value}%'></span></div><strong>{value}/100</strong></div>", unsafe_allow_html=True)
-
-
-def _open_route_deck(result: dict, deck: dict) -> None:
-    st.session_state["meta_game"] = result.get("game", "Pokémon TCG")
-    st.session_state["selected_meta_deck"] = deck.get("id")
-    _track_event("nexoruta_abrir_mazo", deck.get("id", ""), result.get("goal", ""))
-    _go_to("Meta Lab")
-
-
-def _render_route_result(result: dict) -> None:
-    best = result.get("best")
-    if not best:
-        _render_empty_state("🧭", "Aún no hay una ruta disponible", "Prueba otro juego o carga resultados de Meta Lab.")
-        return
-    st.markdown(_route_score_html(best), unsafe_allow_html=True)
-    budget = int(result.get("budget", 0))
-    missing_cost = int(best.get("missing_cost", 0))
-    if missing_cost <= budget:
-        st.success(f"Tu presupuesto cubre el costo faltante estimado. Margen disponible: {_fmt_clp(budget - missing_cost)}.")
-    else:
-        st.warning(f"Para completar esta ruta faltaría aproximadamente {_fmt_clp(missing_cost - budget)} sobre tu presupuesto actual.")
-    _render_route_metrics_breakdown(best)
-    st.markdown("#### Tu camino recomendado")
-    steps = _route_steps(result)
-    cards = "".join(
-        f'<div class="route-step"><div class="num">{i}</div><h4>{escape(title)}</h4><p>{escape(copy)}</p></div>'
-        for i, (title, copy) in enumerate(steps, 1)
-    )
-    st.markdown(f'<div class="route-road">{cards}</div>', unsafe_allow_html=True)
-
-    a1, a2, a3, a4 = st.columns(4)
-    if a1.button("Abrir constructor", type="primary", use_container_width=True, key="route_open_best"):
-        _open_route_deck(result, best["deck"])
-    first_missing = (best.get("missing") or [{}])[0].get("Carta") if best.get("missing") else ""
-    if a2.button("Buscar primer faltante", use_container_width=True, key="route_search_missing", disabled=not bool(first_missing)):
-        _meta_search_marketplace(first_missing, best["deck"].get("nombre", ""))
-    if a3.button("Ir a vender repetidas", use_container_width=True, key="route_sell_extras"):
-        _track_event("nexoruta_vender_repetidas", best["deck"].get("id", "")); _go_to("Vender")
-    if a4.button("Guardar esta ruta", use_container_width=True, key="route_save"):
-        saved = st.session_state.setdefault("nexoruta_saved", [])
-        record = {"deck_id": best["deck"].get("id"), "deck": best["deck"].get("nombre"), "score": best.get("score"), "goal": result.get("goal"), "created_at": result.get("created_at")}
-        if record["deck_id"] not in {x.get("deck_id") for x in saved}:
-            saved.append(record)
-        _notify("Ruta guardada en tu sesión del piloto.", "success"); _track_event("nexoruta_guardada", record["deck_id"], record["goal"])
-
-    alternatives = result.get("ranking", [])[1:4]
-    if alternatives:
-        st.markdown("#### Otras rutas que también encajan contigo")
-        cols = st.columns(len(alternatives))
-        for rank, (col, item) in enumerate(zip(cols, alternatives), 2):
-            deck = item["deck"]
-            with col:
-                st.markdown(
-                    f'<div class="route-alt"><div class="rank">ALTERNATIVA {rank}</div><h4>{escape(str(deck.get("nombre")))}</h4>'
-                    f'<div class="score">{item.get("score")}/100</div><p>{item.get("completion",0):.1f}% de tu colección · {_fmt_clp(item.get("missing_cost",0))} faltante</p></div>',
-                    unsafe_allow_html=True,
-                )
-                if st.button("Elegir esta ruta", key=f"route_alt_{deck.get('id')}", use_container_width=True):
-                    result["best"] = item
-                    result["ranking"] = [item] + [x for x in result["ranking"] if x["deck"].get("id") != deck.get("id")]
-                    st.session_state["nexoruta_result"] = result
-                    _track_event("nexoruta_cambiar_recomendacion", deck.get("id", "")); st.rerun()
-
-
-def _render_nexoruta_builder() -> None:
-    st.markdown('<div class="presentation-strip"><strong>Una sola pregunta, un recorrido completo.</strong><br>NexoRuta combina objetivo, presupuesto, experiencia, colección y metagame para recomendar el siguiente paso más útil.</div>', unsafe_allow_html=True)
-    with st.form("nexoruta_form"):
-        c1, c2, c3 = st.columns(3)
-        goal = c1.selectbox("¿Qué quieres lograr?", NEXORUTA_GOALS, index=NEXORUTA_GOALS.index(st.session_state.get("nexoruta_goal", NEXORUTA_GOALS[0])))
-        games = list(META_DEMO.keys())
-        current_game = st.session_state.get("nexoruta_game", "Pokémon TCG")
-        game = c2.selectbox("Juego", games, index=games.index(current_game) if current_game in games else 0)
-        budget = c3.number_input("Presupuesto disponible (CLP)", min_value=0, max_value=2000000, value=int(st.session_state.get("nexoruta_budget", 60000)), step=5000)
-        c4, c5, c6 = st.columns(3)
-        experience = c4.selectbox("Experiencia", NEXORUTA_EXPERIENCE, index=NEXORUTA_EXPERIENCE.index(st.session_state.get("nexoruta_experience", "Intermedio")))
-        style = c5.selectbox("Estilo preferido", NEXORUTA_STYLES, index=NEXORUTA_STYLES.index(st.session_state.get("nexoruta_style", "Equilibrado")))
-        source = c6.selectbox("Fuente de tu colección", NEXORUTA_COLLECTION_SOURCES, index=NEXORUTA_COLLECTION_SOURCES.index(st.session_state.get("nexoruta_collection_source", "Colección de ejemplo")))
-        submitted = st.form_submit_button("Crear mi NexoRuta", type="primary", use_container_width=True)
-    if submitted:
-        st.session_state.update({
-            "nexoruta_goal": goal, "nexoruta_game": game, "nexoruta_budget": int(budget),
-            "nexoruta_experience": experience, "nexoruta_style": style,
-            "nexoruta_collection_source": source,
-        })
-        result = _generate_nexoruta(goal, game, int(budget), experience, style, source)
-        st.session_state["nexoruta_result"] = result
-        _track_event("crear_nexoruta", object_id=(result.get("best") or {}).get("deck", {}).get("id", ""), metadata=f"{goal}|{game}|{budget}")
-        st.rerun()
-    result = st.session_state.get("nexoruta_result")
-    if result:
-        _render_route_result(result)
-    else:
-        st.markdown("#### Así funciona")
-        cols = st.columns(4)
-        examples = [
-            ("1", "Cuenta tu objetivo", "Competir, coleccionar, vender o preparar un torneo."),
-            ("2", "Leemos tu contexto", "Presupuesto, experiencia, estilo y cartas disponibles."),
-            ("3", "Calculamos tu encaje", "NexoScore compara costo, meta, colección y estabilidad."),
-            ("4", "Te damos una ruta", "Acciones concretas conectadas con Meta Lab y Marketplace."),
-        ]
-        for col, (num, title, copy) in zip(cols, examples):
-            with col:
-                st.markdown(f'<div class="route-step"><div class="num">{num}</div><h4>{title}</h4><p>{copy}</p></div>', unsafe_allow_html=True)
-
-
-def _render_nexoscore_comparison() -> None:
-    game = st.selectbox("Juego para comparar", list(META_DEMO.keys()), key="route_compare_game")
-    fmt = META_DEMO[game].get("formatos", ["Standard"])[0]
-    dataset, _ = _meta_dataset(game, fmt)
-    decks = dataset.get("mazos", [])
-    names = [d.get("nombre") for d in decks]
-    default = names[:3]
-    selected = st.multiselect("Compara hasta 3 mazos", names, default=default, max_selections=3, key="route_compare_decks")
-    source = st.selectbox("Colección usada en la comparación", NEXORUTA_COLLECTION_SOURCES, key="route_compare_source")
-    budget = st.number_input("Presupuesto de comparación", min_value=0, max_value=2000000, value=int(st.session_state.get("nexoruta_budget", 60000)), step=5000, key="route_compare_budget")
-    inventory = _route_inventory(source)
-    rows = []
-    metrics = []
-    for name in selected:
-        deck = next((d for d in decks if d.get("nombre") == name), None)
-        if not deck:
-            continue
-        item = _route_deck_metrics(deck, inventory, int(budget), st.session_state.get("nexoruta_style", "Equilibrado"), "Armar un mazo competitivo", game)
-        metrics.append(item)
-        rows.append({
-            "Mazo": name, "NexoScore": item["score"], "Tier": deck.get("tier"),
-            "Win %": deck.get("win_rate"), "Colección %": item["completion"],
-            "Costo faltante": item["missing_cost"], "Dificultad": item["difficulty_label"],
-            "Estilo": item["archetype"],
-        })
-    if not rows:
-        _render_empty_state("⚖️", "Selecciona al menos un mazo", "NexoScore necesita opciones para comparar.")
-        return
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True,
-                 column_config={"Costo faltante": st.column_config.NumberColumn(format="$%d")})
-    st.markdown("#### Comparación visual")
-    chart = pd.DataFrame([
-        {"Mazo": x["deck"].get("nombre"), "NexoScore": x["score"], "Competitividad": x["competition"], "Compatibilidad": x["compatibility"], "Accesibilidad": x["affordability"]}
-        for x in metrics
-    ]).set_index("Mazo")
-    st.bar_chart(chart)
-    winner = max(metrics, key=lambda x: x["score"])
-    st.success(f"Mejor encaje actual: **{winner['deck'].get('nombre')}** con NexoScore {winner['score']}/100.")
-    if st.button("Convertir el ganador en mi NexoRuta", type="primary", key="route_compare_choose"):
-        result = _generate_nexoruta("Armar un mazo competitivo", game, int(budget), st.session_state.get("nexoruta_experience", "Intermedio"), st.session_state.get("nexoruta_style", "Equilibrado"), source)
-        chosen_id = winner["deck"].get("id")
-        chosen = next((x for x in result["ranking"] if x["deck"].get("id") == chosen_id), winner)
-        result["best"] = chosen
-        result["ranking"] = [chosen] + [x for x in result["ranking"] if x["deck"].get("id") != chosen_id]
-        st.session_state["nexoruta_result"] = result
-        _track_event("nexoscore_a_ruta", chosen_id); st.rerun()
-
-
-def _render_nexo_opportunities() -> None:
-    source = st.selectbox("Analizar colección", NEXORUTA_COLLECTION_SOURCES, key="opportunity_source")
-    inventory = _route_inventory(source)
-    if not inventory:
-        _render_empty_state("🗃️", "No hay cartas para analizar", "Carga tu inventario en el Tasador o activa la colección de ejemplo.")
-        if st.button("Ir al Tasador", type="primary", key="op_go_tasador"):
-            _go_to("Tasador")
-        return
-    opportunities = _route_opportunities(inventory, "Pokémon TCG")
-    extras = [x for x in opportunities if x.get("Repetidas", 0) > 0]
-    useful = [x for x in opportunities if x.get("Mazos meta", 0) >= 2]
-    dormant = [x for x in opportunities if x.get("Mazos meta", 0) == 0]
-    known_value = sum(int(x.get("Precio conocido") or 0) * int(x.get("Repetidas") or 0) for x in extras)
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Cartas distintas", len(inventory)); m2.metric("Copias repetidas", sum(x.get("Repetidas", 0) for x in extras))
-    m3.metric("Útiles en varios mazos", len(useful)); m4.metric("Valor conocido", _fmt_clp(known_value))
-    st.markdown("#### Detector de cartas dormidas")
-    rows = opportunities[:20]
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True,
-                 column_config={"Precio conocido": st.column_config.NumberColumn(format="$%d")})
-    st.caption("El valor solo aparece cuando la carta fue tasada. Las sugerencias competitivas usan las listas disponibles en Meta Lab.")
-    c1, c2 = st.columns(2)
-    if c1.button("Tasar cartas sin precio", type="primary", use_container_width=True, key="op_tasar"):
-        _track_event("oportunidades_ir_tasador"); _go_to("Tasador")
-    if c2.button("Publicar repetidas", use_container_width=True, key="op_vender"):
-        _track_event("oportunidades_ir_vender"); _go_to("Vender")
-
-    st.markdown("#### Trueque inteligente · simulación")
-    result = st.session_state.get("nexoruta_result")
-    missing = ((result or {}).get("best") or {}).get("missing", [])
-    trade_extras = [x for x in extras if int(x.get("Mazos meta", 0)) <= 1] or extras
-    extra = trade_extras[0] if trade_extras else None
-    target = missing[0] if missing else None
-    if extra and target:
-        seed = sum(ord(c) for c in f"{extra['Carta']}{target['Carta']}")
-        compatibility = 82 + seed % 16
-        st.markdown(
-            f'<div class="trade-match"><span class="ruta-kicker">MATCH POTENCIAL · {compatibility}%</span><h3>Tú entregas</h3>'
-            f'<b>{escape(str(extra["Carta"]))} ×{extra.get("Repetidas",1)}</b><div class="trade-arrow">⇄</div><h3>Estás buscando</h3>'
-            f'<b>{escape(str(target.get("Carta")))} ×{target.get("Faltan",1)}</b><p>La diferencia de valor debe confirmarse con edición, estado y precio real.</p></div>',
-            unsafe_allow_html=True,
-        )
-        if st.button("Simular propuesta de intercambio", type="primary", key="trade_simulate", use_container_width=True):
-            _notify("Propuesta simulada creada. En una versión real se enviaría al usuario compatible.", "success")
-            _track_event("trueque_simulado", str(extra["Carta"]), str(target.get("Carta")))
-    else:
-        _render_empty_state("🔄", "Aún no hay un match de intercambio", "Genera una NexoRuta y asegúrate de tener cartas repetidas para encontrar una coincidencia.")
-
-
-def _render_tournament_mode() -> None:
-    game = st.selectbox("Juego", list(META_DEMO.keys()), key="tournament_game")
-    fmt = META_DEMO[game].get("formatos", ["Standard"])[0]
-    dataset, _ = _meta_dataset(game, fmt)
-    decks = dataset.get("mazos", [])
-    deck_name = st.selectbox("Mazo registrado", [d.get("nombre") for d in decks], key="tournament_deck")
-    deck = next((d for d in decks if d.get("nombre") == deck_name), decks[0] if decks else {})
-    c1, c2 = st.columns([2, 1])
-    event_name = c1.text_input("Evento", value=st.session_state.get("nexoruta_event_name", "Próximo torneo local"), key="tournament_event_name")
-    event_days = c2.number_input("Días restantes", min_value=0, max_value=365, value=int(st.session_state.get("nexoruta_event_days", 21)), step=1, key="tournament_days")
-    st.session_state["nexoruta_event_name"] = event_name
-    st.session_state["nexoruta_event_days"] = int(event_days)
-    inventory = _route_inventory(st.session_state.get("nexoruta_collection_source", "Colección de ejemplo"))
-    pct, missing, owned, required = _deck_completion(deck, inventory)
-    st.markdown(f'<div class="tournament-board"><span class="ruta-kicker">CUENTA REGRESIVA · {int(event_days)} DÍAS</span><h2>{escape(event_name)}</h2><p><b>{escape(deck_name)}</b> · {pct:.1f}% cubierto con tu colección · {sum(x.get("Faltan",0) for x in missing)} copia(s) pendientes</p></div>', unsafe_allow_html=True)
-    checklist = [
-        "Lista de 60 cartas cerrada", "Legalidad y regulación verificadas", "Cartas faltantes conseguidas",
-        "Fundas, dados y marcadores preparados", "Decklist registrada", "Probé dos matchups favorables",
-        "Probé dos matchups difíciles", "Transporte, horario y documentos confirmados",
-    ]
-    checks = st.session_state.setdefault("nexoruta_tournament_checks", {})
-    st.markdown("#### Checklist del evento")
-    cols = st.columns(2)
-    completed = 0
-    for idx, item in enumerate(checklist):
-        key = f"{game}|{deck.get('id')}|{idx}"
-        with cols[idx % 2]:
-            value = st.checkbox(item, value=bool(checks.get(key, False)), key=f"tour_check_{_meta_norm(game)}_{deck.get('id')}_{idx}")
-        checks[key] = value
-        completed += int(value)
-    progress = completed / len(checklist)
-    st.progress(progress)
-    st.caption(f"Preparación: {completed}/{len(checklist)} tareas completadas")
-    if deck:
-        opponents = sorted(
-            [(other.get("nombre"), _meta_matchup_value(deck, other)) for other in decks if other.get("id") != deck.get("id")],
-            key=lambda x: x[1],
-        )
-        c3, c4 = st.columns(2)
-        with c3:
-            st.markdown("##### Prioridad de práctica")
-            for name, value in opponents[:3]:
-                st.error(f"{value:.1f}% contra {name}")
-        with c4:
-            st.markdown("##### Matchups más cómodos")
-            for name, value in opponents[-3:][::-1]:
-                st.success(f"{value:.1f}% contra {name}")
-    a1, a2, a3 = st.columns(3)
-    if a1.button("Abrir mazo y faltantes", type="primary", use_container_width=True, key="tour_open_deck"):
-        st.session_state["meta_game"] = game; st.session_state["selected_meta_deck"] = deck.get("id"); _go_to("Meta Lab")
-    if a2.button("Buscar primer faltante", use_container_width=True, key="tour_missing", disabled=not bool(missing)):
-        _meta_search_marketplace(missing[0]["Carta"], deck.get("nombre", ""))
-    if a3.button("Guardar preparación", use_container_width=True, key="tour_save"):
-        _notify("Preparación guardada durante esta sesión.", "success"); _track_event("preparacion_torneo", deck.get("id", ""), f"{completed}/{len(checklist)}")
-
-
-def render_nexoruta(api_key: str | None = None, clp_rate: float = 950) -> None:
-    _track_event("visita_nexoruta", once=True)
-    st.markdown("""
-    <div class="ruta-hero"><span class="ruta-kicker">NEXORUTA · TU HOBBY CON DIRECCIÓN</span>
-      <h1>No te mostramos más opciones. Te mostramos tu <em>siguiente mejor paso</em>.</h1>
-      <p>NexoRuta conecta colección, presupuesto, metagame y marketplace para transformar una intención en un plan concreto.</p>
-    </div>
-    """, unsafe_allow_html=True)
-    tabs = st.tabs(["Crear mi ruta", "NexoScore", "Oportunidades", "Modo torneo"])
-    with tabs[0]: _render_nexoruta_builder()
-    with tabs[1]: _render_nexoscore_comparison()
-    with tabs[2]: _render_nexo_opportunities()
-    with tabs[3]: _render_tournament_mode()
-    _render_feature_vote("nexoruta", "¿NexoRuta diferencia suficientemente a NexoGeek de un marketplace tradicional?")
-
-
-# Recorrido V5: NexoRuta pasa a ser uno de los hitos centrales.
 def _tour_status() -> tuple[int, int, list[tuple[str, bool]]]:
+    """Recorrido centrado en el marketplace y la comunidad geek."""
     actions = st.session_state.get("_journey_actions", set())
     milestones = [
-        ("Crear una NexoRuta", "crear_nexoruta" in actions),
         ("Explorar el marketplace", "visita_marketplace" in actions),
-        ("Abrir una ficha", "abrir_ficha" in actions),
-        ("Explorar Meta Lab", "visita_meta_lab" in actions),
-        ("Abrir un mazo competitivo", "abrir_mazo_meta" in actions or "nexoruta_abrir_mazo" in actions),
-        ("Simular una reserva o carrito", bool({"reserva", "checkout", "sincronizar_faltantes"} & set(actions))),
-        ("Visitar el tasador o publicar", bool({"visita_tasador", "publicar"} & set(actions))),
+        ("Abrir una publicación", "abrir_ficha" in actions),
+        ("Guardar un favorito", "favorito" in actions),
+        ("Simular una reserva", bool({"reserva", "checkout"} & set(actions))),
+        ("Publicar, subastar o contratar", bool({"publicar", "visita_subastas", "visita_servicios"} & set(actions))),
     ]
     return sum(done for _, done in milestones), len(milestones), milestones
 
 
-# Navegación V5 con NexoRuta como módulo diferencial.
+def _render_onboarding() -> None:
+    if st.session_state.get("onboarding_complete"):
+        return
+    st.markdown(
+        '<div class="welcome-deck"><span class="tour-badge">BIENVENIDA · EXPLORA EL NEXO</span>'
+        '<h2>¿Qué parte del mundo geek quieres descubrir?</h2>'
+        '<p>Elige un punto de entrada. El marketplace es el centro y las herramientas TCG quedan disponibles cuando las necesites.</p></div>',
+        unsafe_allow_html=True,
+    )
+    cols = st.columns(4)
+    missions = [
+        (cols[0], "Comprador", "Buscar una pieza", "Explora cartas, mangas, figuras, juegos y accesorios.", "Marketplace"),
+        (cols[1], "Vendedor", "Publicar algo", "Crea un anuncio y revisa cómo se verá frente a la comunidad.", "Vender"),
+        (cols[2], "Comunidad", "Descubrir personas", "Encuentra servicios, actividades, creadores y subastas.", "Comunidad"),
+        (cols[3], "Jugador TCG", "Usar herramientas", "Tasa cartas, revisa el meta y abre el constructor visual.", "Herramientas"),
+    ]
+    for col, role, title, copy, page in missions:
+        with col:
+            st.markdown(
+                f'<div class="role-card"><div class="role-icon">✦</div><h3>{title}</h3><p>{copy}</p></div>',
+                unsafe_allow_html=True,
+            )
+            if st.button(
+                f"Entrar como {role.lower()}",
+                key=f"onboard_geek_{role}",
+                use_container_width=True,
+                type="primary" if role == "Comprador" else "secondary",
+            ):
+                st.session_state["pilot_role"] = role
+                st.session_state["onboarding_complete"] = True
+                _track_event("onboarding", role, page)
+                _go_to(page)
+    if st.button("Explorar libremente", key="skip_onboarding_geek"):
+        st.session_state["pilot_role"] = "Explorador"
+        st.session_state["onboarding_complete"] = True
+        _track_event("onboarding", "Explorador", "sin guía")
+        st.rerun()
+
+
+def _render_sidebar(api_key_default: str = "") -> tuple[str | None, float, float]:
+    """Sidebar pública enfocada en compra, venta y comunidad geek."""
+    api_key_input = st.session_state.get("api_key_guardada", api_key_default) or ""
+    clp_rate = float(st.session_state.get("clp_rate_sidebar", 950))
+    comision = float(st.session_state.get("commission_sidebar", 5.0))
+    _CFG["max_workers"] = int(st.session_state.get("workers_sidebar", 4))
+    _CFG["throttle"] = float(st.session_state.get("throttle_sidebar", 0.2))
+
+    if not _DB_LOADED:
+        for cp in ("card_data", os.path.join("pokemon-tcg-data", "cards", "en")):
+            if os.path.isdir(cp) and cargar_base_local(cp):
+                break
+
+    nav_pages = ["Inicio", "Marketplace", "Vender", "Subastas", "Servicios", "Comunidad", "Herramientas", "Feedback"]
+    with st.sidebar:
+        st.markdown(
+            "<div class='side-brand'><div class='side-logo'>NG</div>"
+            "<div><strong>NexoGeek</strong><small>marketplace geek y coleccionables</small></div></div>",
+            unsafe_allow_html=True,
+        )
+        st.markdown('<span class="pilot-pill"><span class="live-dot"></span>Piloto activo</span>', unsafe_allow_html=True)
+        st.caption("Compra, vende, descubre y conecta con la comunidad geek.")
+
+        current = st.session_state.get("page", "Inicio")
+        if current == "Detalle":
+            current_nav = "Marketplace"
+        elif current in {"Tasador", "Meta Lab"}:
+            current_nav = "Herramientas"
+        else:
+            current_nav = current if current in nav_pages else "Inicio"
+
+        if (
+            st.session_state.get("_sidebar_nav_page") != current_nav
+            or st.session_state.get("sidebar_public_nav") not in nav_pages
+        ):
+            st.session_state["sidebar_public_nav"] = current_nav
+            st.session_state["_sidebar_nav_page"] = current_nav
+
+        selected_nav = st.selectbox(
+            "Ir a",
+            nav_pages,
+            index=nav_pages.index(current_nav),
+            key="sidebar_public_nav",
+        )
+        if selected_nav != current_nav:
+            st.session_state["page"] = selected_nav
+            st.session_state["pending_nav"] = selected_nav
+            st.session_state["_sidebar_nav_page"] = selected_nav
+            st.rerun()
+
+        with st.expander("Mi espacio geek", expanded=True):
+            alias = st.text_input(
+                "Alias",
+                value=st.session_state.get("pilot_alias", "Usuario_Piloto"),
+                key="profile_alias_input_geek",
+            )
+            location = st.selectbox(
+                "Ubicación",
+                UBICACIONES_DEMO,
+                index=UBICACIONES_DEMO.index(st.session_state.get("pilot_location", "Santiago"))
+                if st.session_state.get("pilot_location", "Santiago") in UBICACIONES_DEMO else 0,
+                key="profile_location_input_geek",
+            )
+            universes = [
+                "De todo un poco", "Pokémon TCG", "One Piece", "Magic",
+                "Manga y cómics", "Figuras y animé", "Juegos de mesa", "Accesorios",
+            ]
+            current_interest = st.session_state.get("favorite_universe", universes[0])
+            interest = st.selectbox(
+                "Interés principal",
+                universes,
+                index=universes.index(current_interest) if current_interest in universes else 0,
+                key="profile_interest_geek",
+            )
+            st.session_state["pilot_alias"] = alias.strip() or "Usuario_Piloto"
+            st.session_state["pilot_location"] = location
+            st.session_state["favorite_universe"] = interest
+            st.caption(f"Explorando como: {st.session_state.get('pilot_role') or 'Explorador'}")
+
+        f1, f2, f3 = st.columns(3)
+        f1.metric("Favoritos", len(st.session_state.get("favorites", [])))
+        f2.metric("Reserva", len(st.session_state.get("cart", [])))
+        f3.metric("Avisos", len(st.session_state.get("notifications", [])))
+
+        completed, total, milestones = _tour_status()
+        pct = int(completed / total * 100) if total else 0
+        st.markdown(
+            f'<div class="journey-card"><strong>Recorrido marketplace · {completed}/{total}</strong>'
+            f'<div class="ng-progress"><span style="width:{pct}%"></span></div>'
+            f'<small>{"Siguiente: " + next((name for name, done in milestones if not done), "Recorrido completado")}</small></div>',
+            unsafe_allow_html=True,
+        )
+
+        with st.expander("Reserva", expanded=False):
+            cart_ids = list(st.session_state.get("cart", []))
+            if not cart_ids:
+                st.caption("Tu reserva está vacía.")
+            total_price = 0
+            for lid in cart_ids:
+                item = _listing_by_id(lid)
+                if not item:
+                    continue
+                total_price += int(item.get("price", 0))
+                c1, c2 = st.columns([4, 1])
+                c1.caption(f"{item.get('title')} · {_fmt_clp(item.get('price'))}")
+                if c2.button("×", key=f"sidebar_remove_geek_{lid}"):
+                    st.session_state["cart"].remove(lid)
+                    st.rerun()
+            if cart_ids:
+                st.markdown(f"**Total referencial: {_fmt_clp(total_price)}**")
+                if st.button("Simular checkout", use_container_width=True, type="primary", key="sidebar_checkout_geek"):
+                    _track_event("checkout", metadata=str(total_price))
+                    st.success("Flujo completado sin cobro.")
+
+        with st.expander("Actividad reciente", expanded=False):
+            notifications = st.session_state.get("notifications", [])
+            if not notifications:
+                st.caption("Aún no hay actividad.")
+            for note in notifications[:6]:
+                st.caption(f"{note['time']} · {note['message']}")
+
+        with st.expander("Acceso anfitrión", expanded=False):
+            if not st.session_state.get("admin_unlocked"):
+                st.markdown(
+                    '<div class="admin-lock">Configuración técnica, API y descargas del piloto.</div>',
+                    unsafe_allow_html=True,
+                )
+                pin = st.text_input("PIN", type="password", key="admin_pin_input_geek")
+                if st.button("Desbloquear", key="admin_unlock_geek", use_container_width=True):
+                    if pin == ADMIN_PIN:
+                        st.session_state["admin_unlocked"] = True
+                        st.rerun()
+                    else:
+                        st.error("PIN incorrecto.")
+            else:
+                st.markdown('<span class="host-badge">MODO ANFITRIÓN</span>', unsafe_allow_html=True)
+                api_key_input = st.text_input(
+                    "PokémonTCG API Key",
+                    type="password",
+                    value=api_key_input,
+                    key="api_key_sidebar_geek",
+                )
+                clp_rate = st.number_input(
+                    "USD → CLP", min_value=0, value=int(clp_rate), step=10,
+                    key="clp_rate_sidebar_geek",
+                )
+                comision = st.number_input(
+                    "Comisión simulada %", min_value=0.0, max_value=50.0,
+                    value=float(comision), step=0.5, key="commission_sidebar_geek",
+                )
+                workers = st.slider(
+                    "Hilos", 1, 8, int(_CFG.get("max_workers", 4)),
+                    key="workers_sidebar_geek",
+                )
+                throttle = st.slider(
+                    "Delay anti rate-limit", 0.0, 2.0,
+                    float(_CFG.get("throttle", .2)), .1,
+                    key="throttle_sidebar_geek",
+                )
+                st.session_state["api_key_guardada"] = api_key_input
+                st.session_state["clp_rate_sidebar"] = int(clp_rate)
+                st.session_state["commission_sidebar"] = float(comision)
+                st.session_state["workers_sidebar"] = int(workers)
+                st.session_state["throttle_sidebar"] = float(throttle)
+                _CFG["max_workers"] = int(workers)
+                _CFG["throttle"] = float(throttle)
+                st.caption(f"Fuente de cartas: {'DB local' if _DB_LOADED else 'API cloud'}")
+
+                fb1 = leer_feedback()
+                fb2 = _read_csv_safe(EXTENDED_FEEDBACK_FILE)
+                interactions = _read_csv_safe(INTERACTIONS_FILE)
+                journey = _read_csv_safe(JOURNEY_FILE)
+                if not fb1.empty:
+                    st.download_button(
+                        "Feedback básico", fb1.to_csv(index=False).encode("utf-8-sig"),
+                        "feedback_nexogeek.csv", "text/csv", use_container_width=True,
+                    )
+                if not fb2.empty:
+                    st.download_button(
+                        "Feedback completo", fb2.to_csv(index=False).encode("utf-8-sig"),
+                        "feedback_nexogeek_extendido.csv", "text/csv", use_container_width=True,
+                    )
+                if not interactions.empty:
+                    st.download_button(
+                        "Reacciones", interactions.to_csv(index=False).encode("utf-8-sig"),
+                        "interacciones_nexogeek.csv", "text/csv", use_container_width=True,
+                    )
+                if not journey.empty:
+                    st.download_button(
+                        "Recorrido de usuarios", journey.to_csv(index=False).encode("utf-8-sig"),
+                        "recorrido_nexogeek.csv", "text/csv", use_container_width=True,
+                    )
+                if st.button("Cerrar modo anfitrión", key="admin_lock_geek", use_container_width=True):
+                    st.session_state["admin_unlocked"] = False
+                    st.rerun()
+
+        if st.session_state.get("admin_unlocked"):
+            if st.button("Reiniciar demo", use_container_width=True, key="reset_demo_geek"):
+                for key in [
+                    "marketplace_db", "favorites", "cart", "compare", "notifications",
+                    "selected_listing", "deck_cart", "meta_selected_card", "meta_print_choices",
+                    "auction_watchlist", "subastas_db", "servicios_db", "feature_votes",
+                    "df_result", "candidatos", "onboarding_complete", "pilot_role",
+                    "_journey_seen", "_journey_actions", "favorite_universe",
+                ]:
+                    st.session_state.pop(key, None)
+                _init_demo_state()
+                _init_meta_state()
+                st.rerun()
+
+    return (api_key_input or None), float(clp_rate), float(comision)
+
+
 def _render_top_navigation() -> str:
     options = [
-        ("Inicio", "Inicio"), ("NexoRuta", "NexoRuta"), ("Marketplace", "Mercado"),
-        ("Vender", "Vender"), ("Tasador", "Tasador"), ("Meta Lab", "Meta Lab"),
-        ("Subastas", "Subastas"), ("Servicios", "Servicios"), ("Feedback", "Feedback"),
+        ("Inicio", "Inicio"),
+        ("Marketplace", "Mercado"),
+        ("Vender", "Vender"),
+        ("Subastas", "Subastas"),
+        ("Servicios", "Servicios"),
+        ("Comunidad", "Comunidad"),
+        ("Herramientas", "Herramientas"),
+        ("Feedback", "Feedback"),
     ]
     pending = st.session_state.pop("pending_nav", None)
     current = pending or st.session_state.get("page", "Inicio")
-    valid = {x[0] for x in options} | {"Detalle"}
+    valid = {x[0] for x in options} | {"Detalle", "Tasador", "Meta Lab"}
     if current not in valid:
         current = "Inicio"
-    active = "Marketplace" if current == "Detalle" else current
-    nav_cols = st.columns([1.75, .7, .9, .72, .68, .7, .78, .78, .78, .8], gap="small")
+    if current == "Detalle":
+        active = "Marketplace"
+    elif current in {"Tasador", "Meta Lab"}:
+        active = "Herramientas"
+    else:
+        active = current
+
+    nav_cols = st.columns([1.8, .72, .88, .72, .78, .78, .82, .94, .76], gap="small")
     with nav_cols[0]:
-        st.markdown("<div class='nexo-brand'><div class='nexo-brand-mark'>✦</div><div><div class='nexo-brand-name'>NexoGeek</div><div class='nexo-brand-tag'>colección · juego · comunidad</div></div></div>", unsafe_allow_html=True)
+        st.markdown(
+            "<div class='nexo-brand'><div class='nexo-brand-mark'>✦</div>"
+            "<div><div class='nexo-brand-name'>NexoGeek</div>"
+            "<div class='nexo-brand-tag'>marketplace · comunidad · coleccionables</div></div></div>",
+            unsafe_allow_html=True,
+        )
     for column, (page, label) in zip(nav_cols[1:], options):
         with column:
-            if st.button(label, key=f"top_nav_v5_{page.lower().replace(' ','_')}", use_container_width=True, type="primary" if active == page else "secondary"):
+            if st.button(
+                label,
+                key=f"top_nav_geek_{page.lower().replace(' ', '_')}",
+                use_container_width=True,
+                type="primary" if active == page else "secondary",
+            ):
                 if page != current:
-                    _track_event("navegacion", page); st.session_state["page"] = page; st.rerun()
+                    _track_event("navegacion", page)
+                    st.session_state["page"] = page
+                    st.rerun()
+
     st.session_state["page"] = current
-    st.markdown("<hr style='margin:9px 0 20px;border:none;border-top:2px solid rgba(40,22,58,.12);'>", unsafe_allow_html=True)
+    st.markdown(
+        "<hr style='margin:9px 0 20px;border:none;border-top:2px solid rgba(40,22,58,.12);'>",
+        unsafe_allow_html=True,
+    )
     return current
 
 
+def _open_marketplace_search(term: str = "") -> None:
+    st.session_state["market_search_v3"] = term
+    _track_event("categoria_portada", term or "todos")
+    _go_to("Marketplace")
+
+
 def render_home() -> None:
-    _track_event("visita_inicio", once=True); _render_onboarding()
-    st.markdown("""
-    <div class="nexo-hero"><div class="nexo-hero-copy"><span class="nexo-eyebrow">MÁS QUE UN MARKETPLACE · TU HOBBY CON DIRECCIÓN</span>
-    <h1>Convierte lo que tienes en lo que <em>quieres lograr</em>.</h1>
-    <p>Compra, vende, tasa y entiende el meta. NexoRuta conecta todo para decirte qué mazo puedes armar, cuánto te falta y cuál es tu siguiente mejor paso.</p>
-    <div class="nexo-chip-row"><span>NexoRuta</span><span>Marketplace</span><span>Tasador</span><span>Meta Lab</span><span>Constructor visual</span><span>Trueque inteligente</span></div></div></div>
-    """, unsafe_allow_html=True)
-    st.markdown('<div class="presentation-strip"><strong>Recorrido recomendado para la presentación · 3 minutos</strong><br>1. Crea una NexoRuta · 2. Abre el mazo sugerido · 3. Marca cartas propias · 4. Calcula faltantes · 5. Busca o intercambia.</div>', unsafe_allow_html=True)
-    c1, c2, c3 = st.columns([1.2, 1, 1])
-    if c1.button("Descubrir mi NexoRuta", type="primary", use_container_width=True, key="home_route_v5"):
-        _go_to("NexoRuta")
-    if c2.button("Explorar Marketplace", use_container_width=True, key="home_market_v5"):
+    _track_event("visita_inicio", once=True)
+    _render_onboarding()
+
+    st.markdown(
+        """
+        <div class="geek-market-hero">
+          <span class="geek-eyebrow">MARKETPLACE GEEK · HECHO EN COMUNIDAD</span>
+          <h1>Compra, vende y descubre tu próximo <em>hallazgo geek</em>.</h1>
+          <p>Cartas TCG, mangas, figuras, juegos de mesa, accesorios, productos sellados y creaciones de la comunidad reunidos en un solo lugar.</p>
+          <div class="geek-chip-row">
+            <span>Cartas TCG</span><span>Mangas y cómics</span><span>Figuras</span>
+            <span>Juegos de mesa</span><span>Accesorios</span><span>Servicios creativos</span>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    c1, c2, c3 = st.columns([1.15, 1, 1])
+    if c1.button("Explorar Marketplace", type="primary", use_container_width=True, key="home_market_geek"):
         _go_to("Marketplace")
-    if c3.button("Abrir Meta Lab", use_container_width=True, key="home_meta_v5"):
-        _go_to("Meta Lab")
+    if c2.button("Publicar una pieza", use_container_width=True, key="home_sell_geek"):
+        _go_to("Vender")
+    if c3.button("Ver subastas", use_container_width=True, key="home_auctions_geek"):
+        _go_to("Subastas")
 
     listings = [x for x in st.session_state["marketplace_db"] if x.get("active", True)]
+    categories = len(set(x.get("product_type", "") for x in listings))
+    sellers = len(set(x.get("seller", "") for x in listings))
     hm1, hm2, hm3, hm4 = st.columns(4)
-    hm1.metric("Piezas activas", len(listings)); hm2.metric("Mazos analizados", sum(len(x["mazos"]) for x in META_DEMO.values()))
-    hm3.metric("Rutas guardadas", len(st.session_state.get("nexoruta_saved", []))); hm4.metric("Favoritos", len(st.session_state.get("favorites", [])))
+    hm1.metric("Piezas activas", len(listings))
+    hm2.metric("Categorías", categories)
+    hm3.metric("Vendedores demo", sellers)
+    hm4.metric("Favoritos guardados", len(st.session_state.get("favorites", [])))
 
     st.markdown("<br>", unsafe_allow_html=True)
-    _section_header("¿Qué quieres lograr hoy?", "Elige una misión", "NexoGeek adapta el recorrido para que no tengas que saber por dónde empezar.")
-    missions = [
-        ("Armar un mazo", "Usa tu colección y presupuesto para elegir el mejor encaje.", "Armar un mazo competitivo"),
-        ("Mejorar mi colección", "Detecta staples, repetidas y oportunidades que ya tienes.", "Mejorar mi colección"),
-        ("Vender lo que no uso", "Convierte cartas dormidas en presupuesto para un objetivo.", "Vender lo que no uso"),
-        ("Prepararme para competir", "Completa lista, matchups y checklist antes del evento.", "Prepararme para un torneo"),
+    _section_header(
+        "Explora por categoría",
+        "Todo el mundo geek en un solo Nexo",
+        "Entra por el tipo de pieza que estás buscando y deja que la comunidad haga el resto.",
+    )
+    category_data = [
+        ("🃏", "TCG y cartas", "Cartas sueltas, sellados y accesorios.", "TCG"),
+        ("📚", "Mangas y cómics", "Tomos, colecciones y ediciones especiales.", "manga"),
+        ("🗿", "Figuras y animé", "Figuras, estatuas y piezas de vitrina.", "figura"),
+        ("🎲", "Juegos de mesa", "Juegos modernos, clásicos y expansiones.", "juego de mesa"),
+        ("🧰", "Accesorios", "Playmats, deck boxes, dados y exhibidores.", "accesorio"),
+        ("✨", "Creaciones", "Impresión 3D, arte y productos personalizados.", "diseño"),
     ]
-    cols = st.columns(4)
-    for col, (title, copy, goal) in zip(cols, missions):
+    cols = st.columns(6)
+    for idx, (col, (icon, title, copy, term)) in enumerate(zip(cols, category_data)):
         with col:
-            st.markdown(f'<div class="route-alt"><div class="rank">MISIÓN</div><h4>{title}</h4><p>{copy}</p></div>', unsafe_allow_html=True)
-            if st.button("Comenzar", key=f"mission_{_meta_norm(goal)}", use_container_width=True):
-                st.session_state["nexoruta_goal"] = goal; _track_event("seleccionar_mision", goal); _go_to("NexoRuta")
+            st.markdown(
+                f'<div class="category-tile"><div class="icon">{icon}</div>'
+                f'<div><h4>{title}</h4><p>{copy}</p></div></div>',
+                unsafe_allow_html=True,
+            )
+            if st.button("Explorar", key=f"home_category_{idx}", use_container_width=True):
+                _open_marketplace_search(term)
 
     st.markdown("<br>", unsafe_allow_html=True)
-    _section_header("Meta de la semana", "Del torneo a tu colección", "Consulta tendencias, abre una lista y descubre cuánto te falta para completarla.")
-    dataset, _ = _meta_dataset("Pokémon TCG", "Standard"); top = dataset.get("mazos", [])[:3]
-    cols = st.columns(3)
-    for i, (col, deck) in enumerate(zip(cols, top), 1):
-        with col: _render_meta_rank_card(deck, i, "home_meta_rank_v5")
-    if st.button("Explorar Meta Lab", key="home_meta_all_v5", type="primary"):
-        _go_to("Meta Lab")
-
-    st.markdown("<br>", unsafe_allow_html=True)
-    _section_header("Radar del Nexo", "Hallazgos de la comunidad", "Piezas, vendedores y categorías que completan tu recorrido.")
-    featured = sorted(listings, key=lambda x: (x.get("likes", 0), x.get("views", 0)), reverse=True)[:4]
+    _section_header(
+        "Radar del Nexo",
+        "Hallazgos de la comunidad",
+        "Publicaciones con mayor interés, guardados y actividad dentro de la demostración.",
+    )
+    featured = sorted(
+        listings,
+        key=lambda x: (x.get("likes", 0), x.get("views", 0)),
+        reverse=True,
+    )[:4]
     cols = st.columns(4)
     for col, item in zip(cols, featured):
-        with col: _render_listing_card(item, "home_v5")
-    st.markdown('<div class="trust-strip"><strong>La diferencia NexoGeek</strong><br>No solo encuentras productos: entiendes tu colección, eliges un objetivo y recibes una ruta para alcanzarlo.</div>', unsafe_allow_html=True)
-    _render_feature_vote("inicio", "¿La propuesta diferencial se entiende claramente desde el inicio?")
+        with col:
+            _render_listing_card(item, "home_geek")
+
+    st.markdown(
+        '<div class="community-banner"><span class="section-kicker">COMUNIDAD EN MOVIMIENTO</span>'
+        '<h2>El valor no está solo en el producto.</h2>'
+        '<p>Descubre servicios, creadores, encargos, torneos, subastas y espacios para conectar con otras personas del hobby.</p></div>',
+        unsafe_allow_html=True,
+    )
+    cm1, cm2, cm3 = st.columns(3)
+    if cm1.button("Explorar comunidad", type="primary", use_container_width=True, key="home_community_geek"):
+        _go_to("Comunidad")
+    if cm2.button("Ver servicios", use_container_width=True, key="home_services_geek"):
+        _go_to("Servicios")
+    if cm3.button("Explorar subastas", use_container_width=True, key="home_auction_geek"):
+        _go_to("Subastas")
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    _section_header(
+        "Herramientas opcionales",
+        "Para quienes también juegan TCG",
+        "El marketplace sigue siendo el centro. El tasador, Meta Lab y constructor visual aparecen como utilidades complementarias.",
+    )
+    t1, t2 = st.columns(2)
+    with t1:
+        st.markdown(
+            '<div class="tool-hub-card"><div class="section-kicker">TASACIÓN</div>'
+            '<h3>Identifica y valoriza tus cartas</h3>'
+            '<p>Reconoce versiones, consulta referencias de precio y convierte el resultado en una publicación.</p></div>',
+            unsafe_allow_html=True,
+        )
+        if st.button("Abrir Tasador", key="home_tasador_geek", use_container_width=True):
+            _go_to("Tasador")
+    with t2:
+        st.markdown(
+            '<div class="tool-hub-card secondary"><div class="section-kicker">JUEGO COMPETITIVO</div>'
+            '<h3>Meta Lab y constructor visual</h3>'
+            '<p>Revisa mazos, listas, matchups y calcula cuánto te falta para completar un deck.</p></div>',
+            unsafe_allow_html=True,
+        )
+        if st.button("Abrir Herramientas TCG", key="home_tools_geek", use_container_width=True):
+            _go_to("Herramientas")
+
+    st.markdown(
+        '<div class="trust-strip"><strong>Compra y vende con contexto</strong><br>'
+        'Estado visible · reputación · moderación · entrega coordinada · referencias de precio · comunidad local</div>',
+        unsafe_allow_html=True,
+    )
+    _render_feature_vote("inicio", "¿La portada comunica claramente que NexoGeek es un marketplace geek amplio?")
+
+
+_MARKETPLACE_CORE_GEEK = render_marketplace
+
+
+def render_marketplace() -> None:
+    st.markdown(
+        '<div class="geek-market-strip">'
+        '<div><strong>TCG</strong><span>Cartas, sellados y accesorios</span></div>'
+        '<div><strong>Coleccionables</strong><span>Figuras, manga y piezas especiales</span></div>'
+        '<div><strong>Juegos</strong><span>Mesa, rol y productos para jugar</span></div>'
+        '<div><strong>Comunidad</strong><span>Creadores, encargos y servicios</span></div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    quick = st.columns(7)
+    quick_terms = [
+        ("Todo", ""), ("TCG", "TCG"), ("Manga", "manga"), ("Figuras", "figura"),
+        ("Juegos", "juego de mesa"), ("Accesorios", "accesorio"), ("Sellados", "sellado"),
+    ]
+    for col, (label, term) in zip(quick, quick_terms):
+        with col:
+            if st.button(label, key=f"market_quick_{label.lower()}", use_container_width=True):
+                st.session_state["market_search_v3"] = term
+                st.rerun()
+    _MARKETPLACE_CORE_GEEK()
+
+
+def render_community() -> None:
+    _track_event("visita_comunidad", once=True)
+    st.markdown(
+        '<div class="community-banner"><span class="section-kicker">COMUNIDAD GEEK</span>'
+        '<h2>Descubre personas, actividades y proyectos.</h2>'
+        '<p>NexoGeek no solo conecta compradores con vendedores: también visibiliza creadores, organizadores, tiendas, ligas y servicios del hobby.</p></div>',
+        unsafe_allow_html=True,
+    )
+
+    listings = [x for x in st.session_state.get("marketplace_db", []) if x.get("active", True)]
+    services = st.session_state.get("servicios_db", [])
+    auctions = st.session_state.get("subastas_db", [])
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Vendedores activos", len(set(x.get("seller") for x in listings)))
+    c2.metric("Servicios disponibles", len(services))
+    c3.metric("Subastas abiertas", len(auctions))
+    c4.metric("Universos representados", len(set(x.get("game") for x in listings)))
+
+    tabs = st.tabs(["Agenda geek", "Creadores y servicios", "Subastas destacadas", "Participa"])
+    with tabs[0]:
+        events = [
+            ("SÁBADO · 16:00", "Liga TCG de la comunidad", "Torneo amistoso y espacio de intercambio para jugadores nuevos y experimentados.", "Santiago"),
+            ("DOMINGO · 12:00", "Tarde de juegos de mesa", "Mesas abiertas, demostraciones y búsqueda de grupos para jugar.", "Providencia"),
+            ("PRÓXIMO MES", "Feria de ilustración y coleccionables", "Artistas, impresión 3D, accesorios y piezas hechas por la comunidad.", "Ñuñoa"),
+            ("MENSUAL", "Club manga, animé y cosplay", "Encuentro temático, intercambio de recomendaciones y venta de colecciones.", "Online + presencial"),
+        ]
+        cols = st.columns(4)
+        for col, (date, title, copy, place) in zip(cols, events):
+            with col:
+                st.markdown(
+                    f'<div class="event-card"><div class="date">{date}</div><h4>{title}</h4>'
+                    f'<p>{copy}</p><span class="active-filter">{place}</span></div>',
+                    unsafe_allow_html=True,
+                )
+        st.caption("Agenda demostrativa para validar interés. Los eventos reales requerirán verificación y fecha confirmada.")
+
+    with tabs[1]:
+        if not services:
+            _render_empty_state("✨", "Aún no hay servicios", "La comunidad podrá publicar encargos, diseño, impresión, grading y organización.")
+        else:
+            cols = st.columns(min(4, len(services)))
+            for col, service in zip(cols, services[:4]):
+                with col:
+                    st.markdown(
+                        f'<div class="soft-card"><div class="section-kicker">{_safe_text(service.get("type","Servicio"))}</div>'
+                        f'<h4>{_safe_text(service.get("title",""))}</h4>'
+                        f'<p>{_safe_text(service.get("description",""))}</p>'
+                        f'<strong>{_fmt_clp(service.get("price",0))}</strong><br>'
+                        f'<small>{_safe_text(service.get("provider",""))} · ⭐ {service.get("rating","-")}</small></div>',
+                        unsafe_allow_html=True,
+                    )
+            if st.button("Ver todos los servicios", type="primary", key="community_all_services"):
+                _go_to("Servicios")
+
+    with tabs[2]:
+        if not auctions:
+            _render_empty_state("🔨", "Sin subastas activas", "Las subastas verificadas aparecerán aquí.")
+        else:
+            for auction in auctions[:3]:
+                with st.container(border=True):
+                    a1, a2, a3 = st.columns([3, 1, 1])
+                    a1.markdown(
+                        f"**{auction.get('name','')}**  \n"
+                        f"{auction.get('game','')} · {auction.get('seller','')}"
+                    )
+                    a2.metric("Oferta", _fmt_clp(auction.get("current_bid", 0)))
+                    a3.metric("Pujas", auction.get("bids", 0))
+            if st.button("Entrar a Subastas", key="community_all_auctions", use_container_width=True):
+                _go_to("Subastas")
+
+    with tabs[3]:
+        st.markdown("#### ¿Cómo quieres participar?")
+        p1, p2, p3 = st.columns(3)
+        with p1:
+            st.markdown("**Vende una pieza**  \nPublica cartas, figuras, mangas, juegos o accesorios.")
+            if st.button("Crear publicación", key="community_publish", use_container_width=True):
+                _go_to("Vender")
+        with p2:
+            st.markdown("**Ofrece un servicio**  \nDiseño, impresión, grading, encargos u organización.")
+            if st.button("Publicar servicio", key="community_service", use_container_width=True):
+                _go_to("Servicios")
+        with p3:
+            st.markdown("**Propón una actividad**  \nAyuda a construir una agenda local del hobby.")
+            if st.button("Registrar interés", key="community_event_interest", use_container_width=True):
+                _track_event("interes_evento_comunidad")
+                st.success("Interés registrado para el análisis del piloto.")
+
+    _render_feature_vote("comunidad", "¿La comunidad agrega valor más allá de comprar y vender?")
+
+
+def render_tools_hub() -> None:
+    _track_event("visita_herramientas", once=True)
+    _section_header(
+        "Herramientas TCG",
+        "Utilidades para jugar, coleccionar y vender mejor",
+        "Son funciones complementarias del marketplace; no reemplazan la experiencia principal de compra y venta geek.",
+    )
+    st.markdown(
+        '<div class="geek-nav-note"><strong>Enfoque del producto:</strong> el marketplace es el centro. '
+        'Estas herramientas ayudan a identificar cartas, entender el juego y convertir una necesidad en una búsqueda dentro del mercado.</div>',
+        unsafe_allow_html=True,
+    )
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown(
+            '<div class="tool-hub-card"><div class="section-kicker">TASADOR</div>'
+            '<h3>De carta física a publicación</h3>'
+            '<p>Busca la impresión correcta, consulta precios de referencia, administra tu inventario y publica en el marketplace.</p></div>',
+            unsafe_allow_html=True,
+        )
+        if st.button("Abrir Tasador", type="primary", use_container_width=True, key="tools_open_tasador"):
+            _go_to("Tasador")
+    with c2:
+        st.markdown(
+            '<div class="tool-hub-card secondary"><div class="section-kicker">META LAB</div>'
+            '<h3>Mazos, torneos y constructor visual</h3>'
+            '<p>Explora listas competitivas, marca las cartas que ya tienes y calcula el costo estimado de las faltantes.</p></div>',
+            unsafe_allow_html=True,
+        )
+        if st.button("Abrir Meta Lab", type="primary", use_container_width=True, key="tools_open_meta"):
+            _go_to("Meta Lab")
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Juegos con datos demo", len(META_DEMO))
+    m2.metric("Mazos disponibles", sum(len(data.get("mazos", [])) for data in META_DEMO.values()))
+    m3.metric("Cartas tasadas", len(st.session_state.get("df_result", [])) if "df_result" in st.session_state else 0)
+
+    st.markdown("#### Cómo se conectan con el marketplace")
+    steps = [
+        ("1", "Identifica", "El tasador reconoce la carta y su impresión."),
+        ("2", "Decide", "Meta Lab muestra una lista o necesidad concreta."),
+        ("3", "Busca", "NexoGeek lleva la carta faltante al Marketplace."),
+        ("4", "Publica", "Las cartas repetidas pueden transformarse en anuncios."),
+    ]
+    cols = st.columns(4)
+    for col, (num, title, copy) in zip(cols, steps):
+        with col:
+            st.markdown(
+                f'<div class="soft-card"><div class="step-number">{num}</div><h4>{title}</h4><p>{copy}</p></div>',
+                unsafe_allow_html=True,
+            )
+    _render_feature_vote("herramientas", "¿Las herramientas TCG se sienten útiles sin quitar protagonismo al marketplace?")
 
 
 def main():
-    st.set_page_config(page_title="NexoGeek · NexoRuta", page_icon="✦", layout="wide", initial_sidebar_state="expanded")
-    st.markdown(DARK_CSS + EXTRA_CSS + ORIGINAL_IDENTITY_CSS + PILOT_V3_CSS + META_LAB_CSS + META_DECK_BUILDER_CSS + NEXO_RUTA_CSS, unsafe_allow_html=True)
-    _init_demo_state(); _init_meta_state(); _init_nexoruta_state()
+    st.set_page_config(
+        page_title="NexoGeek · Marketplace Geek",
+        page_icon="✦",
+        layout="wide",
+        initial_sidebar_state="expanded",
+    )
+    st.markdown(
+        DARK_CSS + EXTRA_CSS + ORIGINAL_IDENTITY_CSS + PILOT_V3_CSS
+        + META_LAB_CSS + META_DECK_BUILDER_CSS + GEEK_MARKETPLACE_CSS,
+        unsafe_allow_html=True,
+    )
+    _init_demo_state()
+    _init_meta_state()
+
     api_key, clp_rate, comision = _render_sidebar()
-    page = _render_top_navigation(); _track_event("visita_pagina", page, once=True)
-    if page == "Inicio": render_home()
-    elif page == "NexoRuta": render_nexoruta(api_key, clp_rate)
+    page = _render_top_navigation()
+    _track_event("visita_pagina", page, once=True)
+
+    if page == "Inicio":
+        render_home()
     elif page == "Marketplace":
         context = st.session_state.pop("meta_marketplace_context", None)
-        if context: st.info(f"Buscando **{context.get('carta')}** para completar **{context.get('mazo')}**.")
+        if context:
+            st.info(
+                f"Buscando **{context.get('carta')}** para completar "
+                f"**{context.get('mazo')}**."
+            )
         render_marketplace()
-    elif page == "Detalle": render_product_detail()
-    elif page == "Vender": render_sell()
-    elif page == "Tasador": render_catalogador(api_key, clp_rate, comision)
-    elif page == "Meta Lab": render_meta_lab(api_key, clp_rate)
-    elif page == "Subastas": render_auctions()
-    elif page == "Servicios": render_services()
-    elif page == "Feedback": render_feedback()
-    st.markdown("<br><hr style='border:none;border-top:2px solid rgba(40,22,58,.12);'>", unsafe_allow_html=True)
+    elif page == "Detalle":
+        render_product_detail()
+    elif page == "Vender":
+        render_sell()
+    elif page == "Subastas":
+        render_auctions()
+    elif page == "Servicios":
+        render_services()
+    elif page == "Comunidad":
+        render_community()
+    elif page == "Herramientas":
+        render_tools_hub()
+    elif page == "Tasador":
+        render_catalogador(api_key, clp_rate, comision)
+    elif page == "Meta Lab":
+        render_meta_lab(api_key, clp_rate)
+    elif page == "Feedback":
+        render_feedback()
+
+    st.markdown(
+        "<br><hr style='border:none;border-top:2px solid rgba(40,22,58,.12);'>",
+        unsafe_allow_html=True,
+    )
     foot1, foot2 = st.columns([3, 1])
-    foot1.caption("NexoGeek · Piloto funcional. NexoRuta, Meta Lab, constructor visual y marketplace en una experiencia conectada.")
-    foot2.caption("Objetivo · Colección · Meta · Mercado")
+    foot1.caption(
+        "NexoGeek · Marketplace geek para comprar, vender y conectar con la comunidad. "
+        "Meta Lab y el constructor visual funcionan como herramientas complementarias."
+    )
+    foot2.caption("Mercado · Comunidad · Colección")
 
 
 if __name__ == "__main__":
