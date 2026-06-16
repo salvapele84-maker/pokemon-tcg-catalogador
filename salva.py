@@ -6391,6 +6391,480 @@ def render_tools_hub() -> None:
     _render_feature_vote("herramientas", "¿Las herramientas TCG se sienten útiles sin quitar protagonismo al marketplace?")
 
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# COMUNIDAD ACTIVA — RSVP, LISTA DE ESPERA Y COORDINACIÓN
+# ══════════════════════════════════════════════════════════════════════════════
+EVENT_RSVP_FILE = os.getenv("NEXOGEEK_EVENT_RSVP_FILE", "eventos_nexogeek_rsvp.csv")
+_EVENT_RSVP_LOCK = threading.Lock()
+
+COMMUNITY_EVENTS_CSS = """
+<style>
+.event-shell{
+  background:#FFFDF8;border:2px solid var(--ng-ink);border-radius:22px 22px 8px 22px;
+  padding:18px;box-shadow:6px 6px 0 var(--ng-sun);margin-bottom:14px;min-height:260px
+}
+.event-shell .event-date{font-size:.68rem;font-weight:950;letter-spacing:.09em;text-transform:uppercase;color:var(--ng-purple)}
+.event-shell h3{margin:.35rem 0 .45rem;color:var(--ng-ink);font-size:1.25rem;line-height:1.18}
+.event-shell p{color:#726278;font-size:.82rem;line-height:1.45;margin:.2rem 0 .8rem}
+.event-meta-row{display:flex;gap:7px;flex-wrap:wrap;margin:.45rem 0 .75rem}
+.event-chip{display:inline-flex;align-items:center;background:#FFF8ED;border:1.5px solid #8A55B5;color:#512176;
+  border-radius:999px;padding:4px 8px;font-size:.67rem;font-weight:850}
+.event-status{display:inline-flex;align-items:center;border:2px solid var(--ng-ink);border-radius:10px 10px 4px 10px;
+  padding:5px 9px;font-size:.7rem;font-weight:950;box-shadow:2px 2px 0 var(--ng-mint);margin-bottom:8px}
+.event-status.confirmed{background:#DDF8F3;color:#185D56}.event-status.interested{background:#FFF0CC;color:#7C4B00}
+.event-status.waitlist{background:#F3E9FF;color:#512176}.event-status.cancelled{background:#FFE1D7;color:#8B341E}
+.event-counts{color:var(--ng-muted);font-size:.75rem;margin:.25rem 0 .4rem}
+.event-person-list{background:#F9F2FF;border:1px solid #D7B9EE;border-radius:12px;padding:9px 11px;color:#5F4B69;font-size:.73rem}
+.boardgame-spotlight{background:linear-gradient(135deg,#DDF8F3 0%,#FFF0CC 100%);border:2px solid var(--ng-ink);
+  border-radius:20px 20px 7px 20px;padding:17px;box-shadow:5px 5px 0 var(--ng-coral);margin:12px 0 18px}
+.boardgame-spotlight h3{margin:.1rem 0 .35rem;color:var(--ng-ink)}
+.boardgame-spotlight p{margin:0;color:#66566E;font-size:.82rem}
+@media (max-width:780px){.event-shell{min-height:auto}.event-shell h3{font-size:1.1rem}}
+</style>
+"""
+
+
+def _board_game_demo_listings() -> list[dict]:
+    """Publicaciones demo para representar con claridad al público de juegos de mesa."""
+    return [
+        {
+            "id":"board-catan-001","title":"Catan · juego base en español","game":"Juegos de mesa",
+            "product_type":"Juego de mesa","condition":"Usado","price":25990,"location":"Ñuñoa",
+            "shipping":"Envío y retiro","seller":"MeepleSantiago","verified":True,"rating":4.9,"sales":58,
+            "image":"","stock":1,"negotiable":True,
+            "description":"Juego base completo en español. Incluye todas las losetas, cartas, caminos, poblados y dados. Caja con desgaste leve de almacenamiento.",
+            "tags":["Completo","3-4 jugadores","Conversable"],"views":118,"likes":24,"active":True,"owner":False,
+            "response_time":"Responde en 40 minutos","member_since":"Miembro desde 2023","photo_count":8,"protected":True,
+            "authenticity":"Componentes revisados y fotografiados por el vendedor",
+        },
+        {
+            "id":"board-dixit-001","title":"Dixit Odyssey · edición en español","game":"Juegos de mesa",
+            "product_type":"Juego de mesa","condition":"Como nuevo","price":22990,"location":"Providencia",
+            "shipping":"Envío y retiro","seller":"LaMesaSecreta","verified":True,"rating":4.8,"sales":41,
+            "image":"","stock":1,"negotiable":False,
+            "description":"Edición Odyssey para grupos grandes. Cartas y componentes completos, usados en dos sesiones y guardados en bolsas.",
+            "tags":["Completo","Hasta 12 jugadores","Familiar"],"views":94,"likes":19,"active":True,"owner":False,
+            "response_time":"Responde en 1 hora","member_since":"Miembro desde 2024","photo_count":7,"protected":True,
+            "authenticity":"Inventario de cartas y componentes disponible en la ficha",
+        },
+        {
+            "id":"board-ticket-001","title":"Ticket to Ride Europa · edición en español","game":"Juegos de mesa",
+            "product_type":"Juego de mesa","condition":"Usado","price":29990,"location":"Santiago",
+            "shipping":"Solo retiro","seller":"MesaCritica","verified":True,"rating":4.8,"sales":35,
+            "image":"","stock":1,"negotiable":True,
+            "description":"Juego completo, cartas enfundadas y trenes separados por color. Ideal para iniciar una colección moderna de juegos de mesa.",
+            "tags":["Completo","Familiar","Conversable"],"views":82,"likes":13,"active":True,"owner":False,
+            "response_time":"Responde el mismo día","member_since":"Miembro desde 2024","photo_count":9,"protected":True,
+            "authenticity":"Componentes contabilizados antes de publicar",
+        },
+    ]
+
+
+_legacy_demo_marketplace_seed_events = _demo_marketplace_seed
+_legacy_init_demo_state_events = _init_demo_state
+
+
+def _demo_marketplace_seed() -> list[dict]:
+    items = _legacy_demo_marketplace_seed_events()
+    existing = {str(item.get("id")) for item in items}
+    for item in _board_game_demo_listings():
+        if item["id"] not in existing:
+            items.append(item)
+    return items
+
+
+def _demo_community_events_seed() -> list[dict]:
+    return [
+        {
+            "id":"community-tcg-league","date_label":"SÁBADO 20 JUN · 16:00",
+            "title":"Liga TCG de la comunidad",
+            "description":"Torneo amistoso, intercambio y mesas para Pokémon, One Piece y Magic. Apto para jugadores nuevos.",
+            "location":"Santiago Centro","modality":"Presencial","capacity":24,"base_confirmed":17,"base_interested":31,
+            "organizer":"LigaCentral","start":"20260620T200000Z","end":"20260620T230000Z",
+            "whatsapp_secret":"WHATSAPP_EVENT_TCG",
+        },
+        {
+            "id":"community-boardgame-afternoon","date_label":"DOMINGO 21 JUN · 12:00",
+            "title":"Tarde abierta de juegos de mesa",
+            "description":"Mesas de Catan, Dixit, Ticket to Ride y juegos cooperativos. Puedes llegar solo y unirte a un grupo.",
+            "location":"Providencia","modality":"Presencial","capacity":32,"base_confirmed":19,"base_interested":38,
+            "organizer":"MesaCritica","start":"20260621T160000Z","end":"20260621T210000Z",
+            "whatsapp_secret":"WHATSAPP_EVENT_BOARDGAMES",
+        },
+        {
+            "id":"community-art-fair","date_label":"SÁBADO 4 JUL · 11:00",
+            "title":"Feria de ilustración y coleccionables",
+            "description":"Artistas, impresión 3D, accesorios, figuras y piezas realizadas por creadores de la comunidad.",
+            "location":"Ñuñoa","modality":"Presencial","capacity":60,"base_confirmed":34,"base_interested":72,
+            "organizer":"PortalCraft","start":"20260704T150000Z","end":"20260704T220000Z",
+            "whatsapp_secret":"WHATSAPP_EVENT_FAIR",
+        },
+        {
+            "id":"community-manga-club","date_label":"MENSUAL · 19:30",
+            "title":"Club de manga, animé y cosplay",
+            "description":"Encuentro temático, recomendaciones, intercambio de colecciones y planificación de actividades.",
+            "location":"Online + presencial","modality":"Híbrido","capacity":40,"base_confirmed":21,"base_interested":49,
+            "organizer":"NexoOtaku","start":"20260711T233000Z","end":"20260712T013000Z",
+            "whatsapp_secret":"WHATSAPP_EVENT_MANGA",
+        },
+    ]
+
+
+def _init_demo_state() -> None:
+    _legacy_init_demo_state_events()
+    st.session_state.setdefault("community_events_db", _demo_community_events_seed())
+    st.session_state.setdefault("event_rsvp_status", {})
+    # Si Streamlit recarga el código sin limpiar session_state, añadimos los juegos demo faltantes.
+    listings = st.session_state.setdefault("marketplace_db", [])
+    existing = {str(item.get("id")) for item in listings}
+    for item in _board_game_demo_listings():
+        if item["id"] not in existing:
+            listings.append(item)
+
+
+def _read_event_rsvps() -> pd.DataFrame:
+    columns = ["fecha", "event_id", "session_id", "alias", "status"]
+    if not os.path.exists(EVENT_RSVP_FILE):
+        return pd.DataFrame(columns=columns)
+    try:
+        df = pd.read_csv(EVENT_RSVP_FILE)
+        for column in columns:
+            if column not in df.columns:
+                df[column] = ""
+        return df[columns]
+    except Exception:
+        return pd.DataFrame(columns=columns)
+
+
+def _write_event_rsvp(event_id: str, status: str) -> None:
+    session_id = str(st.session_state.get("session_id") or _new_id("session"))
+    st.session_state["session_id"] = session_id
+    alias = str(st.session_state.get("pilot_alias") or "Participante").strip() or "Participante"
+    row = {
+        "fecha": datetime.now().isoformat(timespec="seconds"),
+        "event_id": str(event_id), "session_id": session_id,
+        "alias": alias[:60], "status": str(status),
+    }
+    try:
+        with _EVENT_RSVP_LOCK:
+            df = _read_event_rsvps()
+            if not df.empty:
+                df = df[~((df["event_id"].astype(str) == str(event_id)) &
+                          (df["session_id"].astype(str) == session_id))]
+            df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+            df.to_csv(EVENT_RSVP_FILE, index=False, encoding="utf-8-sig")
+    except Exception:
+        pass
+    st.session_state.setdefault("event_rsvp_status", {})[str(event_id)] = str(status)
+    _track_event(f"evento_{status}", str(event_id), alias)
+
+
+def _current_event_status(event_id: str) -> str:
+    cached = st.session_state.setdefault("event_rsvp_status", {}).get(str(event_id))
+    if cached:
+        return str(cached)
+    session_id = str(st.session_state.get("session_id", ""))
+    if not session_id:
+        return ""
+    df = _read_event_rsvps()
+    if df.empty:
+        return ""
+    rows = df[(df["event_id"].astype(str) == str(event_id)) &
+              (df["session_id"].astype(str) == session_id)]
+    if rows.empty:
+        return ""
+    status = str(rows.iloc[-1].get("status", ""))
+    st.session_state["event_rsvp_status"][str(event_id)] = status
+    return status
+
+
+def _event_snapshot(event: dict) -> dict:
+    df = _read_event_rsvps()
+    event_rows = df[df["event_id"].astype(str) == str(event.get("id"))] if not df.empty else pd.DataFrame()
+    confirmed_rows = event_rows[event_rows["status"] == "confirmed"] if not event_rows.empty else pd.DataFrame()
+    interested_rows = event_rows[event_rows["status"].isin(["interested", "confirmed", "waitlist"])] if not event_rows.empty else pd.DataFrame()
+    wait_rows = event_rows[event_rows["status"] == "waitlist"] if not event_rows.empty else pd.DataFrame()
+    confirmed = int(event.get("base_confirmed", 0)) + len(confirmed_rows)
+    interested = int(event.get("base_interested", 0)) + len(interested_rows)
+    aliases = [str(x) for x in confirmed_rows.get("alias", pd.Series(dtype=str)).dropna().tolist() if str(x).strip()]
+    return {
+        "confirmed": confirmed,
+        "interested": interested,
+        "waitlist": len(wait_rows),
+        "aliases": aliases,
+    }
+
+
+def _event_waitlist_position(event_id: str) -> int | None:
+    session_id = str(st.session_state.get("session_id", ""))
+    df = _read_event_rsvps()
+    if df.empty:
+        return None
+    rows = df[(df["event_id"].astype(str) == str(event_id)) & (df["status"] == "waitlist")].copy()
+    if rows.empty:
+        return None
+    rows = rows.sort_values("fecha").reset_index(drop=True)
+    matches = rows.index[rows["session_id"].astype(str) == session_id].tolist()
+    return matches[0] + 1 if matches else None
+
+
+def _secret_or_env(name: str) -> str:
+    try:
+        value = st.secrets.get(name, "")
+        if value:
+            return str(value).strip()
+    except Exception:
+        pass
+    return str(os.getenv(name, "") or "").strip()
+
+
+def _event_whatsapp_url(event: dict) -> str:
+    direct = str(event.get("whatsapp_url", "") or "").strip()
+    if direct.startswith("https://"):
+        return direct
+    secret_name = str(event.get("whatsapp_secret", "") or "").strip()
+    value = _secret_or_env(secret_name) if secret_name else ""
+    return value if value.startswith("https://") else ""
+
+
+def _event_calendar_url(event: dict) -> str:
+    start = str(event.get("start", "") or "")
+    end = str(event.get("end", "") or "")
+    if not start or not end:
+        return ""
+    title = quote(str(event.get("title", "Evento NexoGeek")))
+    details = quote(str(event.get("description", "")) + "\nInscripción gestionada desde NexoGeek.")
+    location = quote(str(event.get("location", "")))
+    return f"https://calendar.google.com/calendar/render?action=TEMPLATE&text={title}&dates={start}/{end}&details={details}&location={location}"
+
+
+def _status_badge(status: str) -> str:
+    labels = {
+        "confirmed": ("confirmed", "✓ Asistencia confirmada"),
+        "interested": ("interested", "♡ Marcado como interesante"),
+        "waitlist": ("waitlist", "⏳ En lista de espera"),
+        "cancelled": ("cancelled", "Cupo cancelado"),
+    }
+    css, label = labels.get(status, ("interested", "Sin inscripción"))
+    return f'<span class="event-status {css}">{label}</span>'
+
+
+def _render_event_card(event: dict, prefix: str) -> None:
+    event_id = str(event.get("id"))
+    snapshot = _event_snapshot(event)
+    capacity = max(1, int(event.get("capacity", 1)))
+    confirmed = int(snapshot["confirmed"])
+    available = max(0, capacity - confirmed)
+    status = _current_event_status(event_id)
+    progress = min(1.0, confirmed / capacity)
+
+    st.markdown(
+        f'<div class="event-shell"><div class="event-date">{_safe_text(event.get("date_label",""))}</div>'
+        f'<h3>{_safe_text(event.get("title",""))}</h3><p>{_safe_text(event.get("description",""))}</p>'
+        f'<div class="event-meta-row"><span class="event-chip">📍 {_safe_text(event.get("location",""))}</span>'
+        f'<span class="event-chip">{_safe_text(event.get("modality",""))}</span>'
+        f'<span class="event-chip">Organiza {_safe_text(event.get("organizer","Comunidad"))}</span></div>'
+        f'{_status_badge(status) if status else ""}'
+        f'<div class="event-counts"><strong>{confirmed}/{capacity}</strong> confirmados · '
+        f'{snapshot["interested"]} interesados · {available} cupos disponibles</div></div>',
+        unsafe_allow_html=True,
+    )
+    st.progress(progress)
+
+    b1, b2, b3 = st.columns(3)
+    with b1:
+        if st.button("♡ Me interesa", key=f"{prefix}_interest_{event_id}", use_container_width=True,
+                     disabled=status in {"interested", "confirmed", "waitlist"}):
+            _write_event_rsvp(event_id, "interested")
+            st.rerun()
+    with b2:
+        label = "✓ Confirmado" if status == "confirmed" else ("⏳ En espera" if status == "waitlist" else "Confirmar asistencia")
+        if st.button(label, key=f"{prefix}_confirm_{event_id}", type="primary", use_container_width=True,
+                     disabled=status in {"confirmed", "waitlist"}):
+            current = _event_snapshot(event)
+            new_status = "confirmed" if int(current["confirmed"]) < capacity else "waitlist"
+            _write_event_rsvp(event_id, new_status)
+            if new_status == "confirmed":
+                _notify(f"Cupo confirmado para {event.get('title','el evento')}", "success")
+            else:
+                _notify(f"Ingresaste a la lista de espera de {event.get('title','el evento')}", "info")
+            st.rerun()
+    with b3:
+        if st.button("Cancelar", key=f"{prefix}_cancel_{event_id}", use_container_width=True,
+                     disabled=status not in {"interested", "confirmed", "waitlist"}):
+            _write_event_rsvp(event_id, "cancelled")
+            _notify(f"Cancelaste tu participación en {event.get('title','el evento')}", "info")
+            st.rerun()
+
+    if status == "waitlist":
+        position = _event_waitlist_position(event_id)
+        st.info(f"Estás en la lista de espera" + (f" en la posición {position}." if position else "."))
+
+    link1, link2 = st.columns(2)
+    calendar_url = _event_calendar_url(event)
+    whatsapp_url = _event_whatsapp_url(event)
+    with link1:
+        if calendar_url:
+            st.link_button(f"📅 Agregar · {str(event.get('title',''))[:18]}", calendar_url, use_container_width=True)
+    with link2:
+        if status == "confirmed" and whatsapp_url:
+            st.link_button(f"💬 Grupo · {str(event.get('title',''))[:20]}", whatsapp_url, use_container_width=True)
+        elif status == "confirmed":
+            st.caption("El organizador habilitará aquí el grupo de coordinación.")
+        else:
+            st.caption("El grupo de coordinación se habilita después de confirmar.")
+
+    aliases = snapshot.get("aliases", [])
+    if aliases:
+        preview = ", ".join(aliases[:6])
+        extra = len(aliases) - 6
+        st.markdown(
+            f'<div class="event-person-list"><strong>Participantes del piloto:</strong> {_safe_text(preview)}'
+            f'{" y " + str(extra) + " más" if extra > 0 else ""}</div>', unsafe_allow_html=True,
+        )
+
+
+def render_community() -> None:
+    _track_event("visita_comunidad", once=True)
+    st.markdown(
+        '<div class="community-banner"><span class="section-kicker">COMUNIDAD GEEK</span>'
+        '<h2>Descubre personas, actividades y proyectos.</h2>'
+        '<p>Confirma tu asistencia dentro de NexoGeek y usa WhatsApp solo como canal opcional de coordinación.</p></div>',
+        unsafe_allow_html=True,
+    )
+
+    listings = [x for x in st.session_state.get("marketplace_db", []) if x.get("active", True)]
+    services = st.session_state.get("servicios_db", [])
+    auctions = st.session_state.get("subastas_db", [])
+    events = st.session_state.get("community_events_db", _demo_community_events_seed())
+    rsvps = _read_event_rsvps()
+    confirmed_total = int((rsvps.get("status", pd.Series(dtype=str)) == "confirmed").sum()) if not rsvps.empty else 0
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Vendedores activos", len(set(x.get("seller") for x in listings)))
+    c2.metric("Servicios disponibles", len(services))
+    c3.metric("Eventos en agenda", len(events))
+    c4.metric("Confirmaciones piloto", confirmed_total)
+
+    st.markdown(
+        '<div class="boardgame-spotlight"><div class="section-kicker">MÁS QUE TCG</div>'
+        '<h3>Juegos de mesa también tienen espacio en NexoGeek</h3>'
+        '<p>Explora publicaciones de Catan, Dixit y Ticket to Ride, o confirma asistencia a una tarde abierta para encontrar grupo.</p></div>',
+        unsafe_allow_html=True,
+    )
+    if st.button("🎲 Ver juegos de mesa en Marketplace", type="primary", key="community_boardgames_market", use_container_width=True):
+        st.session_state["market_search_v3"] = "Juegos de mesa"
+        _track_event("categoria_comunidad", "juegos_de_mesa")
+        _go_to("Marketplace")
+
+    tabs = st.tabs(["Agenda e inscripciones", "Creadores y servicios", "Subastas destacadas", "Participa"])
+    with tabs[0]:
+        active_statuses = []
+        for event in events:
+            status = _current_event_status(str(event.get("id")))
+            if status in {"interested", "confirmed", "waitlist"}:
+                active_statuses.append((event, status))
+        if active_statuses:
+            with st.expander(f"Mis eventos ({len(active_statuses)})", expanded=False):
+                for event, status in active_statuses:
+                    st.markdown(f"**{event.get('title')}** · {_safe_text(status)}")
+
+        for start in range(0, len(events), 2):
+            cols = st.columns(2)
+            for col, event in zip(cols, events[start:start+2]):
+                with col:
+                    _render_event_card(event, "community")
+        st.caption(
+            "Las inscripciones del piloto se guardan en un archivo compartido del servidor. "
+            "En producción deberían persistirse en una base de datos con usuarios autenticados."
+        )
+
+    with tabs[1]:
+        if not services:
+            _render_empty_state("✨", "Aún no hay servicios", "La comunidad podrá publicar encargos, diseño, impresión, grading y organización.")
+        else:
+            cols = st.columns(min(4, len(services)))
+            for col, service in zip(cols, services[:4]):
+                with col:
+                    st.markdown(
+                        f'<div class="soft-card"><div class="section-kicker">{_safe_text(service.get("type","Servicio"))}</div>'
+                        f'<h4>{_safe_text(service.get("title",""))}</h4>'
+                        f'<p>{_safe_text(service.get("description",""))}</p>'
+                        f'<strong>{_fmt_clp(service.get("price",0))}</strong><br>'
+                        f'<small>{_safe_text(service.get("provider",""))} · ⭐ {service.get("rating","-")}</small></div>',
+                        unsafe_allow_html=True,
+                    )
+            if st.button("Ver todos los servicios", type="primary", key="community_all_services_events"):
+                _go_to("Servicios")
+
+    with tabs[2]:
+        if not auctions:
+            _render_empty_state("🔨", "Sin subastas activas", "Las subastas verificadas aparecerán aquí.")
+        else:
+            for auction in auctions[:3]:
+                with st.container(border=True):
+                    a1, a2, a3 = st.columns([3, 1, 1])
+                    a1.markdown(f"**{auction.get('name','')}**  \n{auction.get('game','')} · {auction.get('seller','')}")
+                    a2.metric("Oferta", _fmt_clp(auction.get("current_bid", 0)))
+                    a3.metric("Pujas", auction.get("bids", 0))
+            if st.button("Entrar a Subastas", key="community_all_auctions_events", use_container_width=True):
+                _go_to("Subastas")
+
+    with tabs[3]:
+        st.markdown("#### Propón una actividad para la comunidad")
+        with st.form("community_create_event_form", clear_on_submit=True):
+            e1, e2 = st.columns([2, 1])
+            title = e1.text_input("Nombre de la actividad *", placeholder="Ej. Noche abierta de juegos de mesa")
+            date_label = e2.text_input("Fecha u horario", placeholder="Sábado · 18:00")
+            e3, e4, e5 = st.columns(3)
+            location = e3.text_input("Lugar", placeholder="Ñuñoa")
+            modality = e4.selectbox("Modalidad", ["Presencial", "Online", "Híbrido"])
+            capacity = e5.number_input("Cupos", min_value=2, max_value=500, value=20)
+            description = st.text_area("Descripción", placeholder="Qué harán, a quién está dirigida y qué debe llevar cada persona.")
+            whatsapp = st.text_input("Enlace del grupo de WhatsApp (opcional)", placeholder="https://chat.whatsapp.com/...")
+            create = st.form_submit_button("Publicar actividad demo", type="primary", use_container_width=True)
+        if create:
+            if not title.strip() or not location.strip():
+                st.error("Completa al menos el nombre y el lugar.")
+            else:
+                event = {
+                    "id": _new_id("community-event"), "date_label": date_label.strip() or "FECHA POR CONFIRMAR",
+                    "title": title.strip(), "description": description.strip() or "Actividad propuesta durante el piloto.",
+                    "location": location.strip(), "modality": modality, "capacity": int(capacity),
+                    "base_confirmed": 0, "base_interested": 0,
+                    "organizer": st.session_state.get("pilot_alias", "Usuario_Piloto"),
+                    "start": "", "end": "", "whatsapp_url": whatsapp.strip(),
+                }
+                st.session_state.setdefault("community_events_db", []).insert(0, event)
+                _track_event("crear_evento_comunidad", event["id"], event["title"])
+                st.success("Actividad creada para esta sesión de demostración.")
+                st.rerun()
+
+        st.markdown("---")
+        p1, p2 = st.columns(2)
+        with p1:
+            st.markdown("**Vende una pieza**  \nPublica cartas, figuras, mangas, juegos o accesorios.")
+            if st.button("Crear publicación", key="community_publish_events", use_container_width=True):
+                _go_to("Vender")
+        with p2:
+            st.markdown("**Ofrece un servicio**  \nDiseño, impresión, grading, encargos u organización.")
+            if st.button("Publicar servicio", key="community_service_events", use_container_width=True):
+                _go_to("Servicios")
+
+        if st.session_state.get("admin_unlocked"):
+            if st.button("🧹 Limpiar confirmaciones del piloto", key="clear_event_rsvps", use_container_width=True):
+                try:
+                    if os.path.exists(EVENT_RSVP_FILE):
+                        os.remove(EVENT_RSVP_FILE)
+                except Exception:
+                    pass
+                st.session_state["event_rsvp_status"] = {}
+                st.success("Confirmaciones eliminadas.")
+                st.rerun()
+
+    _render_feature_vote("comunidad", "¿Usarías NexoGeek para descubrir y confirmar actividades de la comunidad?")
+
 def main():
     st.set_page_config(
         page_title="NexoGeek · Marketplace Geek",
@@ -6400,7 +6874,7 @@ def main():
     )
     st.markdown(
         DARK_CSS + EXTRA_CSS + ORIGINAL_IDENTITY_CSS + PILOT_V3_CSS
-        + META_LAB_CSS + META_DECK_BUILDER_CSS + GEEK_MARKETPLACE_CSS,
+        + META_LAB_CSS + META_DECK_BUILDER_CSS + GEEK_MARKETPLACE_CSS + COMMUNITY_EVENTS_CSS,
         unsafe_allow_html=True,
     )
     _init_demo_state()
