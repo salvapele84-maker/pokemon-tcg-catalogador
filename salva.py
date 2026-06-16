@@ -79,6 +79,13 @@ DELAY_ENTRE_CONSULTAS  = 1.2   # segundos
 _QUERY_CACHE: dict = {}
 _QUERY_LOCK = threading.Lock()
 
+# Caché de precios compartida por el proceso de Streamlit. La base local se usa
+# para identificar cartas e imágenes; esta caché evita volver a consultar el
+# mismo Card ID durante seis horas.
+_PRICE_CACHE: dict = {}
+_PRICE_CACHE_LOCK = threading.Lock()
+_PRICE_CACHE_TTL = 6 * 60 * 60
+
 # ── Métricas de diagnóstico (para entender lentitud / rate limit en vivo) ─────
 _STATS = {"requests": 0, "cache_hits": 0, "rate_limited": 0, "errores": 0, "tiempo_red": 0.0}
 _STATS_LOCK = threading.Lock()
@@ -167,6 +174,65 @@ def _reset_stats():
     with _STATS_LOCK:
         for k in _STATS:
             _STATS[k] = 0 if k != "tiempo_red" else 0.0
+
+
+def obtener_api_key_streamlit() -> str:
+    """Obtiene la API key sin exponerla en el repositorio.
+
+    Prioridad:
+      1. Streamlit Community Cloud Secrets.
+      2. Variables de entorno locales.
+
+    Acepta varios nombres para facilitar la migración de configuraciones previas.
+    """
+    nombres = (
+        "POKEMONTCG_API_KEY",
+        "POKEMON_TCG_API_KEY",
+        "pokemontcg_api_key",
+    )
+    try:
+        for nombre in nombres:
+            valor = st.secrets.get(nombre, "")
+            if valor:
+                return str(valor).strip()
+    except Exception:
+        pass
+
+    for nombre in nombres:
+        valor = os.getenv(nombre, "")
+        if valor:
+            return str(valor).strip()
+    return ""
+
+
+def limpiar_cache_precios() -> None:
+    """Vacía únicamente la caché de precios por Card ID."""
+    with _PRICE_CACHE_LOCK:
+        _PRICE_CACHE.clear()
+
+
+def diagnostico_api_pokemon(api_key: str | None) -> tuple[bool, str]:
+    """Prueba una consulta mínima y devuelve un mensaje legible."""
+    if not api_key:
+        return False, "No hay una API Key configurada."
+    try:
+        t0 = time.time()
+        resp = requests.get(
+            BASE_URL,
+            headers={"X-Api-Key": api_key},
+            params={"q": 'name:"Pikachu"', "pageSize": 1},
+            timeout=12,
+        )
+        elapsed = int((time.time() - t0) * 1000)
+        if resp.status_code == 200:
+            return True, f"Conexión correcta · {elapsed} ms"
+        if resp.status_code in (401, 403):
+            return False, "La API Key fue rechazada. Revisa el secreto configurado."
+        if resp.status_code == 429:
+            return False, "La API respondió con límite temporal (429). Intenta nuevamente en unos minutos."
+        return False, f"La API respondió con código {resp.status_code}."
+    except requests.RequestException as exc:
+        return False, f"No se pudo conectar con Pokémon TCG API: {exc}"
 
 # ── Estado/condición de la carta (clave para una herramienta de venta) ────────
 # Cada estado tiene una descripción y un multiplicador sobre el precio NM.
@@ -538,34 +604,66 @@ def _resultado_desde_carta(base: dict, carta: dict, numero: str, tiene_numero: b
     }
 
 
-def fetch_precio_por_id(card_id: str, api_key: str | None) -> dict | None:
-    """Consulta un solo card-id en la API y devuelve el objeto carta con precios.
+def fetch_precio_por_id(
+    card_id: str,
+    api_key: str | None,
+    force_refresh: bool = False,
+) -> dict | None:
+    """Consulta precios de una impresión exacta usando su Card ID.
 
-    Esta es la consulta más eficiente posible: un GET directo a /v2/cards/{id},
-    sin búsqueda de texto. Solo se usa en el segundo paso (enriquecimiento de precios)
-    cuando la base local ya identificó la carta pero no tenía precios embebidos.
+    La carta y su imagen ya provienen de ``card_data``. Esta función consulta
+    solamente el objeto actualizado de la API, donde vienen los precios de
+    TCGplayer. Los resultados exitosos se conservan seis horas en memoria.
     """
-    if not card_id or card_id == "-":
+    card_id = str(card_id or "").strip()
+    if not card_id or card_id == "-" or not api_key:
         return None
+
+    ahora = time.time()
+    if not force_refresh:
+        with _PRICE_CACHE_LOCK:
+            cached = _PRICE_CACHE.get(card_id)
+            if cached and ahora - cached[0] < _PRICE_CACHE_TTL:
+                with _STATS_LOCK:
+                    _STATS["cache_hits"] += 1
+                return cached[1]
+
+    headers = {
+        "Content-Type": "application/json",
+        "X-Api-Key": api_key,
+    }
     url = f"{BASE_URL}/{card_id}"
-    headers = {"Content-Type": "application/json"}
-    if api_key:
-        headers["X-Api-Key"] = api_key
-    time.sleep(_CFG.get("throttle", 0.2))
+    time.sleep(max(0.0, float(_CFG.get("throttle", 0.2))))
+    t0 = time.time()
+
     try:
-        resp = requests.get(url, headers=headers, timeout=10)
+        resp = requests.get(url, headers=headers, timeout=12)
         with _STATS_LOCK:
             _STATS["requests"] += 1
+
         if resp.status_code == 429:
             with _STATS_LOCK:
                 _STATS["rate_limited"] += 1
-            time.sleep(3.0)
-            resp = requests.get(url, headers=headers, timeout=10)
-        if resp.status_code == 200:
-            return resp.json().get("data")
-    except Exception:
+            time.sleep(2.5)
+            resp = requests.get(url, headers=headers, timeout=12)
+            with _STATS_LOCK:
+                _STATS["requests"] += 1
+
+        resp.raise_for_status()
+        carta = resp.json().get("data")
+        if carta:
+            with _PRICE_CACHE_LOCK:
+                _PRICE_CACHE[card_id] = (time.time(), carta)
+            return carta
+    except requests.RequestException:
         with _STATS_LOCK:
             _STATS["errores"] += 1
+    except (TypeError, ValueError, KeyError):
+        with _STATS_LOCK:
+            _STATS["errores"] += 1
+    finally:
+        with _STATS_LOCK:
+            _STATS["tiempo_red"] += time.time() - t0
     return None
 
 
@@ -575,92 +673,121 @@ def enriquecer_precios_en_lote(
     clp_rate: float,
     progress_bar=None,
     status_box=None,
+    force_refresh: bool = False,
 ) -> "pd.DataFrame":
-    """Segundo paso: busca precios vía API para cada carta que ya fue identificada.
+    """Completa precios consultando una sola vez cada Card ID único.
 
-    Solo consulta las cartas que:
-      - Tienen un Card ID (la base local lo incluye en cada objeto)
-      - No tienen precio aún (Precio USD Mercado es None/NaN)
-
-    Devuelve el mismo DataFrame con las columnas de precio rellenas.
+    El motor local identifica cartas e imágenes instantáneamente. Después esta
+    función pide a la API únicamente los IDs que aún no tienen precio, reutiliza
+    el resultado en filas repetidas y aplica el multiplicador de condición.
     """
     df = df.copy()
-    if "Card ID" not in df.columns:
+    required = {"Card ID", "Precio USD Mercado"}
+    if not required.issubset(df.columns):
         if status_box:
-            status_box.warning("No hay columna 'Card ID' — no se puede enriquecer.")
+            status_box.warning("Faltan columnas necesarias para sincronizar precios.")
         return df
 
-    def _es_sin_precio(v):
-        if v is None:
-            return True
-        try:
-            return pd.isna(v)
-        except Exception:
-            return False
+    if not api_key:
+        if status_box:
+            status_box.warning(
+                "Las cartas fueron identificadas con la base local, pero falta configurar "
+                "POKEMONTCG_API_KEY en Streamlit Secrets para obtener precios."
+            )
+        return df
 
-    mask_sin_precio = df["Precio USD Mercado"].apply(_es_sin_precio)
-    mask_con_id = (
-        df["Card ID"].notna() &
-        (df["Card ID"].astype(str).str.strip() != "-") &
-        (df["Card ID"].astype(str).str.strip() != "")
+    mask_sin_precio = df["Precio USD Mercado"].apply(
+        lambda value: value is None or pd.isna(value)
     )
+    card_ids = df["Card ID"].astype(str).str.strip()
+    mask_con_id = ~card_ids.isin(["", "-", "None", "nan"])
+    indices = df[mask_sin_precio & mask_con_id].index.tolist()
 
-    filas_a_enriquecer = df[mask_sin_precio & mask_con_id].index.tolist()
-
-    total = len(filas_a_enriquecer)
-    if total == 0:
+    if not indices:
         if status_box:
-            status_box.info("✅ Todas las cartas ya tienen precio.")
+            status_box.success("✅ Todas las cartas identificadas ya tienen precio.")
         return df
 
-    max_workers = _CFG.get("max_workers", 4)
+    ids_unicos = list(dict.fromkeys(card_ids.loc[indices].tolist()))
+    total_ids = len(ids_unicos)
+    max_workers = max(1, min(int(_CFG.get("max_workers", 4)), 4, total_ids))
+    resultados: dict[str, dict | None] = {}
 
-    def _enriquecer_fila(idx):
-        card_id  = df.at[idx, "Card ID"]
-        estado   = str(df.at[idx, "Estado"]) if "Estado" in df.columns else "NM"
-        _, mult  = ESTADOS.get(estado, ("Near Mint", 1.0))
-        carta    = fetch_precio_por_id(card_id, api_key)
-        if carta is None:
-            return idx, None, None, None, None, None
+    if status_box:
+        status_box.info(
+            f"Consultando {total_ids} impresión(es) única(s) para completar "
+            f"{len(indices)} fila(s)..."
+        )
+
+    def consultar(card_id: str):
+        carta = fetch_precio_por_id(card_id, api_key, force_refresh=force_refresh)
+        if not carta:
+            return card_id, None
         precio_usd, variante, fecha = extraer_precio(carta)
-        precio_aj  = round(precio_usd * mult, 2) if precio_usd else None
-        precio_clp = int(round((precio_aj * clp_rate) / 100.0)) * 100 if (precio_aj and clp_rate) else None
-        return idx, precio_usd, precio_aj, precio_clp, variante or "-", fecha
+        return card_id, {
+            "precio_usd": precio_usd,
+            "variante": variante or "-",
+            "fecha": fecha,
+        }
 
-    resultados_precio = {}
     completadas = 0
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(_enriquecer_fila, idx): idx for idx in filas_a_enriquecer}
+        futures = {executor.submit(consultar, cid): cid for cid in ids_unicos}
         for future in as_completed(futures):
-            idx_original = futures[future]
+            cid = futures[future]
             try:
-                idx, p_usd, p_aj, p_clp, variante, fecha = future.result()
+                result_id, datos = future.result()
+                resultados[result_id] = datos
             except Exception:
-                idx, p_usd, p_aj, p_clp, variante, fecha = idx_original, None, None, None, None, None
+                resultados[cid] = None
                 with _STATS_LOCK:
                     _STATS["errores"] += 1
-            resultados_precio[idx] = (p_usd, p_aj, p_clp, variante, fecha)
             completadas += 1
             if progress_bar:
-                progress_bar.progress(completadas / total)
+                progress_bar.progress(completadas / total_ids)
 
-    # Aplicar resultados al DataFrame
-    for idx, (p_usd, p_aj, p_clp, variante, fecha) in resultados_precio.items():
-        if p_usd is not None:
-            df.at[idx, "Precio USD Mercado"]  = p_usd
-            df.at[idx, "Precio USD Ajustado"] = p_aj
-            df.at[idx, "Precio CLP Sugerido"] = p_clp
-            df.at[idx, "Variante Precio"]     = variante
-            df.at[idx, "Fecha Precio"]        = fecha
+    filas_actualizadas = 0
+    for idx in indices:
+        card_id = str(df.at[idx, "Card ID"]).strip()
+        datos = resultados.get(card_id)
+        if not datos or not datos.get("precio_usd"):
+            continue
+
+        estado = str(df.at[idx, "Estado"]) if "Estado" in df.columns else "NM"
+        _, multiplicador = ESTADOS.get(estado, ("Near Mint", 1.0))
+        precio_usd = float(datos["precio_usd"])
+        precio_ajustado = round(precio_usd * multiplicador, 2)
+        precio_clp = (
+            int(round((precio_ajustado * float(clp_rate)) / 100.0)) * 100
+            if clp_rate else None
+        )
+
+        df.at[idx, "Precio USD Mercado"] = precio_usd
+        df.at[idx, "Precio USD Ajustado"] = precio_ajustado
+        df.at[idx, "Precio CLP Sugerido"] = precio_clp
+        df.at[idx, "Variante Precio"] = datos["variante"]
+        df.at[idx, "Fecha Precio"] = datos["fecha"]
+        filas_actualizadas += 1
 
     if progress_bar:
         progress_bar.progress(1.0)
     if status_box:
-        n_ok = sum(1 for (p, *_) in resultados_precio.values() if p is not None)
-        status_box.markdown(f"💰 **{n_ok}/{total}** precios obtenidos correctamente.")
+        ids_con_precio = sum(
+            1 for datos in resultados.values()
+            if datos and datos.get("precio_usd")
+        )
+        if filas_actualizadas:
+            status_box.success(
+                f"✅ {filas_actualizadas}/{len(indices)} fila(s) actualizadas · "
+                f"{ids_con_precio}/{total_ids} impresión(es) con precio."
+            )
+        else:
+            status_box.warning(
+                "La API respondió, pero no encontró precios TCGplayer para estas impresiones. "
+                "Puedes completar precios manualmente o seleccionar otra versión."
+            )
 
     return df
-
 
 def procesar_carta(fila: dict, api_key: str | None = None, clp_rate: float = 0) -> dict:
     nombre_original = str(fila.get("nombre", "")).strip()
@@ -2877,8 +3004,25 @@ def render_catalogador(api_key: str | None, clp_rate: float, comision: float) ->
             for idx, result in enumerate(res_list):
                 result = dict(result or {}); candidates[idx] = result.pop("_candidatos", []); clean.append(result)
             st.session_state["candidatos"] = candidates
-            st.session_state["df_result"] = pd.DataFrame(clean)
-            status.success("✅ Inventario procesado.")
+            df_resultado = pd.DataFrame(clean)
+
+            # Flujo híbrido: card_data entrega identificación e imágenes y la API
+            # completa únicamente los precios de cada Card ID único.
+            if api_key:
+                status.info("✅ Cartas identificadas. Sincronizando precios de mercado...")
+                price_bar = st.progress(0)
+                df_resultado = enriquecer_precios_en_lote(
+                    df_resultado, api_key, clp_rate,
+                    progress_bar=price_bar, status_box=status,
+                )
+                st.session_state["ultima_sincronizacion_precios"] = datetime.now().isoformat(timespec="seconds")
+            else:
+                status.warning(
+                    "Inventario identificado con la base local. Configura POKEMONTCG_API_KEY "
+                    "en Streamlit Secrets para añadir precios automáticamente."
+                )
+
+            st.session_state["df_result"] = df_resultado
             st.rerun()
 
     if "df_result" in st.session_state:
@@ -2891,10 +3035,41 @@ def render_catalogador(api_key: str | None, clp_rate: float, comision: float) ->
         if n_sin:
             st.markdown("---")
             st.info(f"Hay {n_sin} carta(s) identificadas sin precio de referencia.")
-            if st.button(f"💰 Sincronizar precios ({n_sin})", type="primary", use_container_width=True, key="sync_prices"):
-                _reset_stats(); progress = st.progress(0); status2 = st.empty()
-                updated = enriquecer_precios_en_lote(df_cur, api_key, clp_rate, progress_bar=progress, status_box=status2)
-                st.session_state["df_result"] = updated; st.rerun()
+            sync1, sync2 = st.columns([2, 1])
+            with sync1:
+                if st.button(
+                    f"💰 Sincronizar precios ({n_sin})",
+                    type="primary", use_container_width=True, key="sync_prices",
+                    disabled=not bool(api_key),
+                ):
+                    _reset_stats(); progress = st.progress(0); status2 = st.empty()
+                    updated = enriquecer_precios_en_lote(
+                        df_cur, api_key, clp_rate,
+                        progress_bar=progress, status_box=status2,
+                    )
+                    st.session_state["df_result"] = updated
+                    st.session_state["ultima_sincronizacion_precios"] = datetime.now().isoformat(timespec="seconds")
+                    st.rerun()
+            with sync2:
+                if st.button(
+                    "🔄 Reintentar desde cero",
+                    use_container_width=True, key="force_sync_prices",
+                    disabled=not bool(api_key),
+                ):
+                    limpiar_cache_precios(); _reset_stats()
+                    progress = st.progress(0); status2 = st.empty()
+                    updated = enriquecer_precios_en_lote(
+                        df_cur, api_key, clp_rate,
+                        progress_bar=progress, status_box=status2, force_refresh=True,
+                    )
+                    st.session_state["df_result"] = updated
+                    st.session_state["ultima_sincronizacion_precios"] = datetime.now().isoformat(timespec="seconds")
+                    st.rerun()
+            if not api_key:
+                st.warning(
+                    "La base local carga cartas e imágenes, pero los precios requieren "
+                    "POKEMONTCG_API_KEY en Streamlit Secrets."
+                )
     _render_feature_vote("tasador", "¿El tasador sería una razón importante para usar NexoGeek?")
 
 
@@ -5802,7 +5977,19 @@ def _render_sidebar(api_key_default: str = "") -> tuple[str | None, float, float
                 st.session_state["throttle_sidebar"] = float(throttle)
                 _CFG["max_workers"] = int(workers)
                 _CFG["throttle"] = float(throttle)
-                st.caption(f"Fuente de cartas: {'DB local' if _DB_LOADED else 'API cloud'}")
+                st.caption(f"Fuente de cartas: {'DB local + API de precios' if _DB_LOADED else 'API cloud'}")
+                if api_key_input:
+                    st.success("API Key cargada desde Secrets o panel anfitrión.")
+                else:
+                    st.warning("Sin API Key: habrá imágenes locales, pero no precios automáticos.")
+
+                api_c1, api_c2 = st.columns(2)
+                if api_c1.button("Probar API", key="test_api_geek", use_container_width=True):
+                    ok, message = diagnostico_api_pokemon(api_key_input or None)
+                    (st.success if ok else st.error)(message)
+                if api_c2.button("Vaciar caché precios", key="clear_price_cache_geek", use_container_width=True):
+                    limpiar_cache_precios()
+                    st.success("Caché de precios vaciada.")
 
                 fb1 = leer_feedback()
                 fb2 = _read_csv_safe(EXTENDED_FEEDBACK_FILE)
@@ -6219,7 +6406,7 @@ def main():
     _init_demo_state()
     _init_meta_state()
 
-    api_key, clp_rate, comision = _render_sidebar()
+    api_key, clp_rate, comision = _render_sidebar(obtener_api_key_streamlit())
     page = _render_top_navigation()
     _track_event("visita_pagina", page, once=True)
 
