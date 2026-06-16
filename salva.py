@@ -6,6 +6,7 @@ import glob
 import difflib
 import threading
 import re
+import hashlib
 from datetime import datetime
 from html import escape
 from urllib.parse import urlparse, quote
@@ -1046,6 +1047,225 @@ def _rebuild_row(row: dict, carta: dict, clp_rate: float) -> dict:
     return nuevo
 
 
+def _inventory_publication_key(row: dict) -> str:
+    """Identificador estable para agrupar la misma impresión y evitar duplicados."""
+    card_id = str(row.get("Card ID", "") or "").strip()
+    if card_id.lower() in {"", "-", "nan", "none"}:
+        card_id = "|".join([
+            str(row.get("Nombre EN", row.get("Nombre Original", ""))).strip().lower(),
+            str(row.get("Set", "")).strip().lower(),
+            str(row.get("Número Carta", "")).strip().lower(),
+        ])
+    estado = str(row.get("Estado", "NM") or "NM").strip().upper()
+    variante = str(row.get("Variante Precio", "-") or "-").strip().lower()
+    return f"{card_id}|{estado}|{variante}"
+
+
+def _inventory_signature(df: pd.DataFrame) -> str:
+    """Firma del inventario para reiniciar el editor solo cuando cambian los resultados."""
+    cols = [c for c in [
+        "Card ID", "Nombre Original", "Set", "Número Carta", "Estado", "Cantidad",
+        "Precio CLP Sugerido", "Variante Precio", "Revisar", "URL Imagen", "Publicado",
+    ] if c in df.columns]
+    if not cols:
+        return "empty"
+    normalized = df[cols].fillna("").astype(str)
+    payload = normalized.to_csv(index=True).encode("utf-8")
+    return hashlib.sha1(payload).hexdigest()[:16]
+
+
+def _prepare_bulk_publication_table(df_result: pd.DataFrame) -> pd.DataFrame:
+    """Agrupa impresiones compatibles y crea la tabla editable de publicación masiva."""
+    groups: dict[str, dict] = {}
+    for idx, row in df_result.iterrows():
+        data = row.to_dict()
+        key = _inventory_publication_key(data)
+        qty_raw = pd.to_numeric(pd.Series([data.get("Cantidad", 1)]), errors="coerce").iloc[0]
+        qty = max(1, int(qty_raw)) if pd.notna(qty_raw) else 1
+        price_raw = pd.to_numeric(pd.Series([data.get("Precio CLP Sugerido", 0)]), errors="coerce").iloc[0]
+        price = max(0, int(price_raw)) if pd.notna(price_raw) else 0
+        revisar = str(data.get("Revisar", "No")) == "Sí"
+        card_id = str(data.get("Card ID", "") or "").strip()
+        valid_match = card_id.lower() not in {"", "-", "nan", "none"} and str(data.get("Set", "")) != "No encontrado"
+        already_published = str(data.get("Publicado", "No")) == "Sí"
+
+        if key not in groups:
+            status = "Lista para publicar"
+            if revisar:
+                status = "Revisar coincidencia"
+            elif not valid_match:
+                status = "Sin coincidencia válida"
+            elif price <= 0:
+                status = "Completar precio"
+            elif already_published:
+                status = "Ya publicada"
+            groups[key] = {
+                "Publicar": bool(valid_match and not revisar and price > 0 and not already_published),
+                "Imagen": str(data.get("URL Imagen", "") or ""),
+                "Carta": str(data.get("Nombre Original", data.get("Nombre EN", "Carta"))),
+                "Set": str(data.get("Set", "-")),
+                "Número": str(data.get("Número Carta", "-")),
+                "Estado": str(data.get("Estado", "NM")),
+                "Disponible": qty,
+                "Cantidad": qty,
+                "Precio CLP": price,
+                "Confianza": str(data.get("Confianza", "ninguna")),
+                "Estado publicación": status,
+                "_inventory_key": key,
+                "_source_indices": [int(idx)],
+            }
+        else:
+            groups[key]["Disponible"] += qty
+            groups[key]["Cantidad"] += qty
+            groups[key]["_source_indices"].append(int(idx))
+            # Si alguna fila del grupo exige revisión, el grupo completo queda bloqueado.
+            if revisar:
+                groups[key]["Publicar"] = False
+                groups[key]["Estado publicación"] = "Revisar coincidencia"
+            elif already_published and groups[key]["Estado publicación"] == "Lista para publicar":
+                groups[key]["Publicar"] = False
+                groups[key]["Estado publicación"] = "Ya publicada"
+
+    records = list(groups.values())
+    if not records:
+        return pd.DataFrame()
+    table = pd.DataFrame(records)
+    table["Valor lote"] = table["Cantidad"] * table["Precio CLP"]
+    return table
+
+
+def _init_bulk_publication_state(df_result: pd.DataFrame) -> pd.DataFrame:
+    signature = _inventory_signature(df_result)
+    if st.session_state.get("bulk_publish_signature") != signature:
+        st.session_state["bulk_publish_signature"] = signature
+        st.session_state["bulk_publish_table"] = _prepare_bulk_publication_table(df_result)
+        st.session_state["bulk_publish_editor_version"] = st.session_state.get("bulk_publish_editor_version", 0) + 1
+    table = st.session_state.get("bulk_publish_table")
+    return table.copy() if isinstance(table, pd.DataFrame) else pd.DataFrame()
+
+
+def _set_bulk_selection(mode: str) -> None:
+    table = st.session_state.get("bulk_publish_table")
+    if not isinstance(table, pd.DataFrame) or table.empty:
+        return
+    eligible = table["Estado publicación"].isin(["Lista para publicar", "Completar precio"])
+    if mode == "all":
+        table.loc[:, "Publicar"] = eligible & (pd.to_numeric(table["Precio CLP"], errors="coerce").fillna(0) > 0)
+    elif mode == "none":
+        table.loc[:, "Publicar"] = False
+    elif mode == "priced":
+        table.loc[:, "Publicar"] = eligible & (pd.to_numeric(table["Precio CLP"], errors="coerce").fillna(0) > 0)
+    elif mode == "nm_lp":
+        table.loc[:, "Publicar"] = eligible & table["Estado"].isin(["NM", "LP"]) & (pd.to_numeric(table["Precio CLP"], errors="coerce").fillna(0) > 0)
+    st.session_state["bulk_publish_table"] = table
+    st.session_state["bulk_publish_editor_version"] = st.session_state.get("bulk_publish_editor_version", 0) + 1
+
+
+def _apply_bulk_price_rule(percent: float, round_to: int, minimum: int) -> None:
+    table = st.session_state.get("bulk_publish_table")
+    if not isinstance(table, pd.DataFrame) or table.empty:
+        return
+    prices = pd.to_numeric(table["Precio CLP"], errors="coerce").fillna(0)
+    adjusted = prices * (1 + percent / 100.0)
+    if round_to > 0:
+        adjusted = (adjusted / round_to).round() * round_to
+    adjusted = adjusted.where(prices <= 0, adjusted.clip(lower=minimum))
+    table["Precio CLP"] = adjusted.round().astype(int)
+    table["Valor lote"] = pd.to_numeric(table["Cantidad"], errors="coerce").fillna(0).astype(int) * table["Precio CLP"]
+    st.session_state["bulk_publish_table"] = table
+    st.session_state["bulk_publish_editor_version"] = st.session_state.get("bulk_publish_editor_version", 0) + 1
+
+
+def _publish_inventory_batch(df_result: pd.DataFrame, edited: pd.DataFrame, location: str,
+                             shipping: str, negotiable: bool, description_template: str) -> tuple[int, int, list[str]]:
+    """Crea o actualiza publicaciones y devuelve (creadas, actualizadas, omitidas)."""
+    created = 0
+    updated = 0
+    skipped: list[str] = []
+    marketplace = st.session_state.setdefault("marketplace_db", [])
+    selected = edited[edited["Publicar"] == True].copy()  # noqa: E712
+    batch_id = _new_id("batch")
+
+    for _, item in selected.iterrows():
+        price = int(pd.to_numeric(pd.Series([item.get("Precio CLP", 0)]), errors="coerce").fillna(0).iloc[0])
+        available = int(pd.to_numeric(pd.Series([item.get("Disponible", 1)]), errors="coerce").fillna(1).iloc[0])
+        quantity = int(pd.to_numeric(pd.Series([item.get("Cantidad", available)]), errors="coerce").fillna(available).iloc[0])
+        quantity = max(1, min(quantity, available))
+        status = str(item.get("Estado publicación", ""))
+        if status in {"Revisar coincidencia", "Sin coincidencia válida"}:
+            skipped.append(f"{item.get('Carta', 'Carta')}: {status.lower()}")
+            continue
+        if price <= 0:
+            skipped.append(f"{item.get('Carta', 'Carta')}: falta precio")
+            continue
+
+        source_indices = item.get("_source_indices", [])
+        if isinstance(source_indices, str):
+            source_indices = [int(x) for x in source_indices.split(",") if x.strip().isdigit()]
+        source_indices = list(source_indices) if isinstance(source_indices, (list, tuple)) else []
+        if not source_indices:
+            skipped.append(f"{item.get('Carta', 'Carta')}: origen no identificado")
+            continue
+        source_idx = int(source_indices[0])
+        fila = df_result.loc[source_idx].to_dict()
+        inventory_key = str(item.get("_inventory_key", _inventory_publication_key(fila)))
+        description = description_template.format(
+            carta=str(item.get("Carta", "Carta")),
+            set=str(item.get("Set", "-")),
+            numero=str(item.get("Número", "-")),
+            estado=str(item.get("Estado", "NM")),
+            cantidad=quantity,
+        )
+
+        existing = next((x for x in marketplace if x.get("owner") and x.get("inventory_key") == inventory_key), None)
+        if existing:
+            existing.update({
+                "price": price,
+                "stock": quantity,
+                "condition": str(item.get("Estado", fila.get("Estado", "NM"))),
+                "location": location,
+                "shipping": shipping,
+                "negotiable": bool(negotiable),
+                "description": description,
+                "image": str(item.get("Imagen", fila.get("URL Imagen", ""))),
+                "active": True,
+                "batch_id": batch_id,
+            })
+            listing_id = existing["id"]
+            updated += 1
+        else:
+            listing = _listing_from_inventory(
+                fila=fila,
+                price=price,
+                quantity=quantity,
+                condition=str(item.get("Estado", fila.get("Estado", "NM"))),
+                location=location,
+                shipping=shipping,
+                negotiable=negotiable,
+                description=description,
+                track=False,
+            )
+            listing.update({
+                "inventory_key": inventory_key,
+                "batch_id": batch_id,
+                "source_rows": source_indices,
+                "tags": list(dict.fromkeys(listing.get("tags", []) + ["Publicación masiva"])),
+            })
+            marketplace.insert(0, listing)
+            listing_id = listing["id"]
+            created += 1
+
+        for idx in source_indices:
+            if idx in df_result.index:
+                df_result.at[idx, "Publicado"] = "Sí"
+                df_result.at[idx, "ID Publicación"] = listing_id
+
+    st.session_state["marketplace_db"] = marketplace
+    st.session_state["df_result"] = df_result
+    _track_event("publicar_lote", batch_id, f"creadas={created}; actualizadas={updated}; omitidas={len(skipped)}")
+    return created, updated, skipped
+
+
 def render_dashboard(df_result: pd.DataFrame, clp_rate: float = 0, comision: float = 0.0):
     """Panel de inventario y puente directo hacia el marketplace de la demo."""
     st.markdown("---")
@@ -1186,49 +1406,236 @@ def render_dashboard(df_result: pd.DataFrame, clp_rate: float = 0, comision: flo
         st.caption("Simulación para validar el modelo comercial. No procesa pagos reales.")
 
     with subtabs[4]:
-        st.markdown("#### Convierte una carta tasada en una publicación")
-        publicables = df_result.copy()
-        if "Revisar" in publicables.columns:
-            publicables = publicables[publicables["Revisar"] != "Sí"]
-        if publicables.empty:
-            st.warning("Primero corrige las cartas marcadas para revisión.")
+        st.markdown("#### Publicación masiva desde el inventario")
+        st.caption(
+            "Las cartas aptas quedan seleccionadas automáticamente. Desmarca únicamente las que no quieras vender, "
+            "ajusta cantidades o precios y confirma el lote. Las filas dudosas se bloquean para proteger la publicación."
+        )
+
+        bulk_table = _init_bulk_publication_state(df_result)
+        if bulk_table.empty:
+            st.warning("No hay cartas disponibles para preparar publicaciones.")
         else:
-            opciones_pub = [
-                f"{idx} · {row.get('Nombre Original', '-')} · {row.get('Set', '-')} #{row.get('Número Carta', '-')}"
-                for idx, row in publicables.iterrows()
-            ]
-            seleccion = st.selectbox("Carta a publicar", opciones_pub, key="publish_inventory_select")
-            idx_real = int(seleccion.split(" · ", 1)[0])
-            fila = df_result.loc[idx_real].to_dict()
-            p1, p2, p3 = st.columns(3)
-            precio_base = int(fila.get("Precio CLP Sugerido") or 0)
-            precio_publicacion = p1.number_input("Precio de publicación", min_value=0, value=precio_base, step=500, key="publish_inventory_price")
-            cantidad_pub = p2.number_input("Cantidad", min_value=1, max_value=max(1, int(fila.get("Cantidad", 1))), value=1, key="publish_inventory_qty")
-            estado_pub = p3.selectbox("Estado", list(ESTADOS.keys()), index=list(ESTADOS.keys()).index(fila.get("Estado", "NM")), key="publish_inventory_condition")
-            p4, p5, p6 = st.columns(3)
-            ubicacion = p4.selectbox("Ubicación", UBICACIONES_DEMO, index=0, key="publish_inventory_location")
-            envio = p5.selectbox("Entrega", ["Envío y retiro", "Solo envío", "Solo retiro"], key="publish_inventory_shipping")
-            negociable = p6.checkbox("Precio conversable", value=False, key="publish_inventory_negotiable")
-            descripcion = st.text_area(
-                "Descripción",
-                value=f"Carta {_safe_text(fila.get('Nombre Original', ''))} en estado {estado_pub}. Se entrega protegida.",
-                key="publish_inventory_description",
-            )
-            if st.button("🚀 Publicar ahora", type="primary", use_container_width=True, key="publish_inventory_btn"):
-                listing = _listing_from_inventory(
-                    fila=fila,
-                    price=int(precio_publicacion),
-                    quantity=int(cantidad_pub),
-                    condition=estado_pub,
-                    location=ubicacion,
-                    shipping=envio,
-                    negotiable=negociable,
-                    description=descripcion,
+            ready = int((bulk_table["Estado publicación"] == "Lista para publicar").sum())
+            review = int((bulk_table["Estado publicación"] == "Revisar coincidencia").sum())
+            missing_price = int((bulk_table["Estado publicación"] == "Completar precio").sum())
+            already = int((bulk_table["Estado publicación"] == "Ya publicada").sum())
+            grouped_units = int(pd.to_numeric(bulk_table["Disponible"], errors="coerce").fillna(0).sum())
+
+            b1, b2, b3, b4, b5 = st.columns(5)
+            b1.metric("Impresiones agrupadas", len(bulk_table))
+            b2.metric("Unidades", grouped_units)
+            b3.metric("Listas", ready)
+            b4.metric("Por revisar", review)
+            b5.metric("Sin precio / publicadas", missing_price + already)
+
+            st.markdown("##### Selección rápida")
+            q1, q2, q3, q4 = st.columns(4)
+            if q1.button("Seleccionar aptas", use_container_width=True, key="bulk_select_all"):
+                _set_bulk_selection("all")
+                st.rerun()
+            if q2.button("Deseleccionar todas", use_container_width=True, key="bulk_select_none"):
+                _set_bulk_selection("none")
+                st.rerun()
+            if q3.button("Solo con precio", use_container_width=True, key="bulk_select_priced"):
+                _set_bulk_selection("priced")
+                st.rerun()
+            if q4.button("Solo NM y LP", use_container_width=True, key="bulk_select_nm_lp"):
+                _set_bulk_selection("nm_lp")
+                st.rerun()
+
+            with st.expander("Ajustar precios del lote", expanded=False):
+                pr1, pr2, pr3, pr4 = st.columns(4)
+                price_percent = pr1.number_input(
+                    "Ajuste sobre referencia (%)", min_value=-50.0, max_value=100.0,
+                    value=0.0, step=1.0, key="bulk_price_percent",
                 )
-                st.session_state["marketplace_db"].insert(0, listing)
-                _notify(f"Publicación creada: {listing['title']}", "success")
-                st.success("✅ La carta ya aparece en el marketplace de la demo.")
-                st.session_state["selected_listing"] = listing["id"]
+                round_to = pr2.selectbox("Redondear a", [100, 500, 1000], index=1, key="bulk_round_to")
+                minimum = pr3.number_input("Precio mínimo", min_value=0, value=500, step=500, key="bulk_minimum_price")
+                pr4.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                if pr4.button("Aplicar al lote", type="primary", use_container_width=True, key="bulk_apply_price"):
+                    _apply_bulk_price_rule(float(price_percent), int(round_to), int(minimum))
+                    st.rerun()
+
+            display_cols = [
+                "Publicar", "Imagen", "Carta", "Set", "Número", "Estado",
+                "Disponible", "Cantidad", "Precio CLP", "Confianza", "Estado publicación",
+                "_inventory_key", "_source_indices",
+            ]
+            table_for_editor = st.session_state["bulk_publish_table"][display_cols].copy()
+            # Las listas internas se serializan para que el editor pueda mantenerlas sin problemas.
+            table_for_editor["_source_indices"] = table_for_editor["_source_indices"].apply(
+                lambda values: ",".join(str(x) for x in values) if isinstance(values, (list, tuple)) else str(values)
+            )
+            editor_version = st.session_state.get("bulk_publish_editor_version", 0)
+            edited = st.data_editor(
+                table_for_editor,
+                hide_index=True,
+                use_container_width=True,
+                height=min(650, 155 + len(table_for_editor) * 35),
+                key=f"bulk_publish_editor_{editor_version}",
+                disabled=[
+                    "Imagen", "Carta", "Set", "Número", "Disponible",
+                    "Confianza", "Estado publicación", "_inventory_key", "_source_indices",
+                ],
+                column_config={
+                    "Publicar": st.column_config.CheckboxColumn(
+                        "Publicar", help="Desmarca las cartas que deseas conservar.", default=True,
+                    ),
+                    "Imagen": st.column_config.ImageColumn("Carta", width="small"),
+                    "Carta": st.column_config.TextColumn("Nombre", width="medium"),
+                    "Set": st.column_config.TextColumn("Set", width="medium"),
+                    "Número": st.column_config.TextColumn("N°", width="small"),
+                    "Estado": st.column_config.SelectboxColumn("Estado", options=list(ESTADOS.keys()), required=True),
+                    "Disponible": st.column_config.NumberColumn("Stock", min_value=1, format="%d"),
+                    "Cantidad": st.column_config.NumberColumn("Publicar", min_value=1, step=1, format="%d"),
+                    "Precio CLP": st.column_config.NumberColumn("Precio unitario", min_value=0, step=100, format="$%d"),
+                    "Confianza": st.column_config.TextColumn("Match", width="small"),
+                    "Estado publicación": st.column_config.TextColumn("Validación", width="medium"),
+                    "_inventory_key": None,
+                    "_source_indices": None,
+                },
+            )
+            # Guardar cambios para que los controles rápidos y reglas de precio trabajen sobre la última edición.
+            edited_state = edited.copy()
+            edited_state["_source_indices"] = edited_state["_source_indices"].apply(
+                lambda value: [int(x) for x in str(value).split(",") if x.strip().isdigit()]
+            )
+            edited_state["Valor lote"] = (
+                pd.to_numeric(edited_state["Cantidad"], errors="coerce").fillna(0)
+                * pd.to_numeric(edited_state["Precio CLP"], errors="coerce").fillna(0)
+            ).astype(int)
+            st.session_state["bulk_publish_table"] = edited_state
+
+            selected = edited_state[edited_state["Publicar"] == True].copy()  # noqa: E712
+            selected_value = int(selected["Valor lote"].sum()) if not selected.empty else 0
+            selected_units = int(pd.to_numeric(selected.get("Cantidad", 0), errors="coerce").fillna(0).sum()) if not selected.empty else 0
+            selected_valid = selected[
+                ~selected["Estado publicación"].isin(["Revisar coincidencia", "Sin coincidencia válida"])
+                & (pd.to_numeric(selected["Precio CLP"], errors="coerce").fillna(0) > 0)
+            ]
+
+            s1, s2, s3, s4 = st.columns(4)
+            s1.metric("Publicaciones elegidas", len(selected))
+            s2.metric("Aptas para confirmar", len(selected_valid))
+            s3.metric("Unidades seleccionadas", selected_units)
+            s4.metric("Valor total publicado", _fmt_clp(selected_value))
+
+            st.markdown("##### Condiciones comunes del lote")
+            c1, c2, c3 = st.columns(3)
+            bulk_location = c1.selectbox("Ubicación", UBICACIONES_DEMO, index=0, key="bulk_location")
+            bulk_shipping = c2.selectbox(
+                "Entrega", ["Envío y retiro", "Solo envío", "Solo retiro"], key="bulk_shipping"
+            )
+            bulk_negotiable = c3.checkbox("Precios conversables", value=False, key="bulk_negotiable")
+            description_template = st.text_area(
+                "Plantilla de descripción",
+                value=(
+                    "{carta} · {set} #{numero}. Estado {estado}. "
+                    "Stock publicado: {cantidad}. Se entrega protegida y embalada con cuidado."
+                ),
+                help="Puedes usar {carta}, {set}, {numero}, {estado} y {cantidad}.",
+                key="bulk_description_template",
+            )
+
+            if selected.empty:
+                st.info("Selecciona al menos una carta para crear el lote.")
+            elif len(selected_valid) < len(selected):
+                st.warning(
+                    f"{len(selected) - len(selected_valid)} selección(es) serán omitidas porque requieren revisión o no tienen precio."
+                )
+
+            confirm = st.checkbox(
+                f"Confirmo que revisé las {len(selected_valid)} publicaciones aptas del lote.",
+                value=False,
+                key="bulk_confirm_checkbox",
+            )
+            if st.button(
+                f"Publicar {len(selected_valid)} productos en el marketplace",
+                type="primary",
+                use_container_width=True,
+                disabled=(not confirm or selected_valid.empty),
+                key="bulk_publish_confirm",
+            ):
+                created, updated, skipped = _publish_inventory_batch(
+                    df_result=df_result,
+                    edited=edited_state,
+                    location=bulk_location,
+                    shipping=bulk_shipping,
+                    negotiable=bulk_negotiable,
+                    description_template=description_template,
+                )
+                st.session_state.pop("bulk_publish_signature", None)
+                st.session_state["bulk_last_result"] = {
+                    "created": created, "updated": updated, "skipped": skipped,
+                }
+                st.rerun()
+
+            last_result = st.session_state.pop("bulk_last_result", None)
+            if last_result:
+                st.success(
+                    f"✅ Lote procesado: {last_result['created']} publicaciones creadas y "
+                    f"{last_result['updated']} actualizadas sin duplicarlas."
+                )
+                if last_result["skipped"]:
+                    with st.expander(f"Ver {len(last_result['skipped'])} elementos omitidos"):
+                        for reason in last_result["skipped"][:50]:
+                            st.write(f"• {reason}")
+                if st.button("Abrir mis publicaciones", use_container_width=True, key="bulk_open_market"):
+                    _go_to("Vender")
+
+        with st.expander("Publicar solamente una carta", expanded=False):
+            publicables = df_result.copy()
+            if "Revisar" in publicables.columns:
+                publicables = publicables[publicables["Revisar"] != "Sí"]
+            if publicables.empty:
+                st.warning("Primero corrige las cartas marcadas para revisión.")
+            else:
+                opciones_pub = [
+                    f"{idx} · {row.get('Nombre Original', '-')} · {row.get('Set', '-')} #{row.get('Número Carta', '-')}"
+                    for idx, row in publicables.iterrows()
+                ]
+                seleccion = st.selectbox("Carta a publicar", opciones_pub, key="publish_inventory_select")
+                idx_real = int(seleccion.split(" · ", 1)[0])
+                fila = df_result.loc[idx_real].to_dict()
+                p1, p2, p3 = st.columns(3)
+                precio_base = int(fila.get("Precio CLP Sugerido") or 0)
+                precio_publicacion = p1.number_input(
+                    "Precio", min_value=0, value=precio_base, step=500, key="publish_inventory_price"
+                )
+                cantidad_pub = p2.number_input(
+                    "Cantidad", min_value=1, max_value=max(1, int(fila.get("Cantidad", 1))),
+                    value=1, key="publish_inventory_qty",
+                )
+                estado_pub = p3.selectbox(
+                    "Estado", list(ESTADOS.keys()),
+                    index=list(ESTADOS.keys()).index(fila.get("Estado", "NM")),
+                    key="publish_inventory_condition",
+                )
+                p4, p5, p6 = st.columns(3)
+                ubicacion = p4.selectbox("Ubicación", UBICACIONES_DEMO, index=0, key="publish_inventory_location")
+                envio = p5.selectbox(
+                    "Entrega", ["Envío y retiro", "Solo envío", "Solo retiro"], key="publish_inventory_shipping"
+                )
+                negociable = p6.checkbox("Precio conversable", value=False, key="publish_inventory_negotiable")
+                descripcion = st.text_area(
+                    "Descripción",
+                    value=f"Carta {fila.get('Nombre Original', '')} en estado {estado_pub}. Se entrega protegida.",
+                    key="publish_inventory_description",
+                )
+                if st.button("Publicar una carta", use_container_width=True, key="publish_inventory_btn"):
+                    listing = _listing_from_inventory(
+                        fila=fila, price=int(precio_publicacion), quantity=int(cantidad_pub),
+                        condition=estado_pub, location=ubicacion, shipping=envio,
+                        negotiable=negociable, description=descripcion,
+                    )
+                    listing["inventory_key"] = _inventory_publication_key(fila)
+                    st.session_state["marketplace_db"].insert(0, listing)
+                    df_result.at[idx_real, "Publicado"] = "Sí"
+                    df_result.at[idx_real, "ID Publicación"] = listing["id"]
+                    st.session_state["df_result"] = df_result
+                    st.session_state.pop("bulk_publish_signature", None)
+                    st.success("✅ La carta ya aparece en el marketplace.")
 
 
 def _agregar_resultado_al_dashboard(res: dict):
@@ -2918,7 +3325,7 @@ def _render_image_or_placeholder(image: str, emoji: str = "🃏", width: int = 2
 
 def _listing_from_inventory(fila: dict, price: int, quantity: int, condition: str,
                             location: str, shipping: str, negotiable: bool,
-                            description: str) -> dict:
+                            description: str, track: bool = True) -> dict:
     listing = _legacy_listing_from_inventory_v3(
         fila, price, quantity, condition, location, shipping, negotiable, description
     )
@@ -2926,7 +3333,8 @@ def _listing_from_inventory(fila: dict, price: int, quantity: int, condition: st
         "response_time":"Perfil nuevo · respuesta por confirmar", "member_since":"Se unió durante el piloto",
         "photo_count":1, "protected":True, "authenticity":"Carta vinculada al tasador de NexoGeek",
     })
-    _track_event("publicar", listing.get("id", ""), "publicación desde tasador")
+    if track:
+        _track_event("publicar", listing.get("id", ""), "publicación desde tasador")
     return listing
 
 
