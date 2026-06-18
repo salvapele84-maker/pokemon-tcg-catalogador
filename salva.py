@@ -6865,16 +6865,39 @@ def render_community() -> None:
 
     _render_feature_vote("comunidad", "¿Usarías NexoGeek para descubrir y confirmar actividades de la comunidad?")
 
+
+# Oculta completamente la barra lateral pública y el control para desplegarla.
+# La lógica interna del sidebar se mantiene para conservar la API Key, la tasa
+# USD/CLP y las preferencias del piloto, pero ya no se muestra a visitantes.
+HIDE_SIDEBAR_CSS = """
+<style>
+section[data-testid="stSidebar"],
+[data-testid="stSidebar"] {
+    display: none !important;
+}
+[data-testid="collapsedControl"],
+[data-testid="stSidebarCollapsedControl"] {
+    display: none !important;
+}
+/* Permite que el contenido principal aproveche el ancho disponible. */
+[data-testid="stAppViewContainer"] > .main,
+[data-testid="stMain"] {
+    margin-left: 0 !important;
+}
+</style>
+"""
+
 def main():
     st.set_page_config(
         page_title="NexoGeek · Marketplace Geek",
         page_icon="✦",
         layout="wide",
-        initial_sidebar_state="expanded",
+        initial_sidebar_state="collapsed",
     )
     st.markdown(
         DARK_CSS + EXTRA_CSS + ORIGINAL_IDENTITY_CSS + PILOT_V3_CSS
-        + META_LAB_CSS + META_DECK_BUILDER_CSS + GEEK_MARKETPLACE_CSS + COMMUNITY_EVENTS_CSS,
+        + META_LAB_CSS + META_DECK_BUILDER_CSS + GEEK_MARKETPLACE_CSS + COMMUNITY_EVENTS_CSS
+        + HIDE_SIDEBAR_CSS,
         unsafe_allow_html=True,
     )
     _init_demo_state()
