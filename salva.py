@@ -3181,6 +3181,146 @@ def render_services() -> None:
     _render_feature_vote("servicios", "¿Buscarías u ofrecerías servicios especializados aquí?")
 
 
+def _render_admin_panel_main() -> None:
+    """Panel privado accesible sin depender de la barra lateral."""
+    st.markdown("---")
+    with st.expander("🔐 Acceso del anfitrión", expanded=False):
+        st.caption(
+            "Panel privado para revisar resultados del piloto, descargar archivos y reiniciar la demo."
+        )
+
+        if not st.session_state.get("admin_unlocked"):
+            pin = st.text_input(
+                "PIN de anfitrión",
+                type="password",
+                key="admin_pin_main_feedback",
+            )
+            if st.button(
+                "Desbloquear panel",
+                key="admin_unlock_main_feedback",
+                use_container_width=True,
+                type="primary",
+            ):
+                if pin == ADMIN_PIN:
+                    st.session_state["admin_unlocked"] = True
+                    st.success("Panel de anfitrión desbloqueado.")
+                    st.rerun()
+                else:
+                    st.error("PIN incorrecto.")
+            return
+
+        st.markdown('<span class="host-badge">MODO ANFITRIÓN</span>', unsafe_allow_html=True)
+
+        fb_basic = leer_feedback()
+        fb_full = _read_csv_safe(EXTENDED_FEEDBACK_FILE)
+        interactions = _read_csv_safe(INTERACTIONS_FILE)
+        journey = _read_csv_safe(JOURNEY_FILE)
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Feedback básico", len(fb_basic))
+        m2.metric("Feedback completo", len(fb_full))
+        m3.metric("Interacciones", len(interactions))
+        sessions = journey["session_id"].nunique() if (not journey.empty and "session_id" in journey.columns) else 0
+        m4.metric("Sesiones", int(sessions))
+
+        st.markdown("#### Descargar resultados")
+        d1, d2 = st.columns(2)
+        with d1:
+            if not fb_basic.empty:
+                st.download_button(
+                    "Descargar feedback básico",
+                    fb_basic.to_csv(index=False).encode("utf-8-sig"),
+                    "feedback_nexogeek.csv",
+                    "text/csv",
+                    use_container_width=True,
+                    key="download_feedback_basic_main",
+                )
+            if not interactions.empty:
+                st.download_button(
+                    "Descargar interacciones",
+                    interactions.to_csv(index=False).encode("utf-8-sig"),
+                    "interacciones_nexogeek.csv",
+                    "text/csv",
+                    use_container_width=True,
+                    key="download_interactions_main",
+                )
+        with d2:
+            if not fb_full.empty:
+                st.download_button(
+                    "Descargar feedback completo",
+                    fb_full.to_csv(index=False).encode("utf-8-sig"),
+                    "feedback_nexogeek_extendido.csv",
+                    "text/csv",
+                    use_container_width=True,
+                    key="download_feedback_full_main",
+                )
+            if not journey.empty:
+                st.download_button(
+                    "Descargar recorrido de usuarios",
+                    journey.to_csv(index=False).encode("utf-8-sig"),
+                    "recorrido_nexogeek.csv",
+                    "text/csv",
+                    use_container_width=True,
+                    key="download_journey_main",
+                )
+
+        with st.expander("Ver respuestas dentro de la página", expanded=False):
+            if fb_full.empty and fb_basic.empty:
+                st.info("Todavía no hay respuestas guardadas.")
+            else:
+                preview = fb_full if not fb_full.empty else fb_basic
+                st.dataframe(preview.tail(100), use_container_width=True, hide_index=True)
+
+        st.markdown("#### Controles de la demostración")
+        confirm_reset = st.checkbox(
+            "Confirmo que quiero reiniciar la demo",
+            key="confirm_reset_main_feedback",
+        )
+        c1, c2, c3 = st.columns(3)
+
+        if c1.button(
+            "Reiniciar demo",
+            key="reset_demo_main_feedback",
+            use_container_width=True,
+            disabled=not confirm_reset,
+        ):
+            for key in [
+                "marketplace_db", "favorites", "cart", "compare", "notifications",
+                "selected_listing", "deck_cart", "meta_selected_card", "meta_print_choices",
+                "auction_watchlist", "subastas_db", "servicios_db", "feature_votes",
+                "df_result", "candidatos", "onboarding_complete", "pilot_role",
+                "_journey_seen", "_journey_actions", "favorite_universe",
+                "community_events_db", "event_rsvp_status",
+            ]:
+                st.session_state.pop(key, None)
+            _init_demo_state()
+            _init_meta_state()
+            st.success("Demo reiniciada.")
+            st.rerun()
+
+        if c2.button(
+            "Limpiar inscripciones",
+            key="clear_event_rsvps_main_feedback",
+            use_container_width=True,
+        ):
+            try:
+                if os.path.exists(EVENT_RSVP_FILE):
+                    os.remove(EVENT_RSVP_FILE)
+            except Exception:
+                pass
+            st.session_state["event_rsvp_status"] = {}
+            st.success("Inscripciones del piloto eliminadas.")
+            st.rerun()
+
+        if c3.button(
+            "Cerrar modo anfitrión",
+            key="admin_lock_main_feedback",
+            use_container_width=True,
+        ):
+            st.session_state["admin_unlocked"] = False
+            st.rerun()
+
+
 def render_feedback() -> None:
     _section_header("Validación", "Tu opinión define la siguiente versión", "Queremos entender qué genera valor, qué causa desconfianza y qué debería priorizarse.")
     with st.form("extended_feedback_form", clear_on_submit=True):
@@ -4130,6 +4270,8 @@ def render_feedback() -> None:
             count=rows["session_id"].nunique() if "session_id" in rows.columns else len(rows)
             counts.append({"Momento":labels[ev],"Personas / sesiones":int(count)})
         st.dataframe(pd.DataFrame(counts),use_container_width=True,hide_index=True)
+
+    _render_admin_panel_main()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
